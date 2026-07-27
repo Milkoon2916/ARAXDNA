@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>워크북 생성기</title>
+<style>
+  body { font-family: "Noto Sans KR", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 16px; color:#1a1a1a; }
+  h1 { font-size: 20px; }
+  label { display:block; font-weight:700; margin-top: 16px; margin-bottom: 4px; font-size: 13px; }
+  textarea { width:100%; height: 220px; font-size: 13px; padding: 8px; box-sizing:border-box; }
+  input[type=text], input[type=password], select {
+    width:100%; padding: 8px; font-size: 13px; box-sizing:border-box;
+  }
+  .row { display:flex; gap: 16px; }
+  .row > div { flex:1; }
+  button {
+    margin-top: 18px; padding: 10px 18px; font-size: 14px; font-weight:700;
+    background:#111; color:#fff; border:none; border-radius: 4px; cursor:pointer;
+  }
+  button:disabled { background:#999; cursor:not-allowed; }
+  button.secondary { background:#0070C0; margin-left: 8px; }
+  #status { margin-top: 12px; font-size: 13px; color:#0070C0; min-height: 18px; }
+  #error { margin-top: 12px; font-size: 13px; color:#C00000; white-space: pre-wrap; }
+  #preview-wrap { margin-top: 24px; border: 1px solid #ccc; }
+  #preview { width:100%; height: 800px; border: none; }
+  .hint { font-size:11px; color:#777; margin-top:2px; }
+  .hint a { color:#0070C0; font-weight:700; text-decoration:none; }
+  .hint a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+  <h1>📘 지문 워크북 생성기</h1>
+
+  <label for="apiKey">Gemini API 키</label>
+  <input type="password" id="apiKey" placeholder="AIza..." />
+  <div class="hint">
+    API 키는 브라우저에만 저장되고 서버로 전송되지 않습니다. ·
+    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Gemini API 키 발급받기 →</a>
+  </div>
+
+  <div class="row">
+    <div>
+      <label for="model">모델 선택</label>
+      <select id="model"></select>
+    </div>
+    <div>
+      <label for="title">워크북 제목</label>
+      <input type="text" id="title" placeholder="예: 3월 모의고사 34번 지문" />
+    </div>
+  </div>
+
+  <label for="passage">지문 (영어 원문)</label>
+  <textarea id="passage" placeholder="여기에 영어 지문을 붙여넣으세요..."></textarea>
+
+  <button id="generateBtn">워크북 생성</button>
+  <div id="status"></div>
+  <div id="error"></div>
+
+  <div id="preview-wrap" style="display:none;">
+    <iframe id="preview"></iframe>
+  </div>
+  <button id="downloadBtn" class="secondary" style="display:none;">PDF 다운로드</button>
+
+<script type="module">
+  import { generateWorkbook, MODEL_OPTIONS } from "./workbook-generator.js";
+  import { renderWorkbookHTML } from "./workbook-renderer.js";
+
+  const $ = (id) => document.getElementById(id);
+
+  // 모델 드롭다운 채우기
+  const modelSelect = $("model");
+  MODEL_OPTIONS.forEach((opt, i) => {
+    const el = document.createElement("option");
+    el.value = opt.value;
+    el.textContent = `${opt.label} — ${opt.description}`;
+    if (opt.value === "gemini-3.6-flash") el.selected = true;
+    modelSelect.appendChild(el);
+  });
+
+  // API 키는 로컬 저장 (편의용)
+  const savedKey = localStorage.getItem("gemini_api_key");
+  if (savedKey) $("apiKey").value = savedKey;
+
+  let lastHtml = "";
+
+  $("generateBtn").addEventListener("click", async () => {
+    const apiKey = $("apiKey").value.trim();
+    const passage = $("passage").value.trim();
+    const model = modelSelect.value;
+    const title = $("title").value.trim() || "영어 지문 워크북";
+
+    $("error").textContent = "";
+    if (!apiKey) return ($("error").textContent = "Gemini API 키를 입력하세요.");
+    if (!passage) return ($("error").textContent = "지문을 입력하세요.");
+
+    localStorage.setItem("gemini_api_key", apiKey);
+
+    $("generateBtn").disabled = true;
+    $("downloadBtn").style.display = "none";
+    $("preview-wrap").style.display = "none";
+
+    const stepLabels = { 1: "해석", 2: "빈칸 채우기", 3: "문장 순서", 4: "언스크램블" };
+
+    try {
+      const workbook = await generateWorkbook({
+        passage,
+        apiKey,
+        model,
+        onProgress: ({ step, status }) => {
+          $("status").textContent =
+            status === "start"
+              ? `STEP ${step} (${stepLabels[step]}) 생성 중...`
+              : `STEP ${step} (${stepLabels[step]}) 완료`;
+        },
+      });
+
+      lastHtml = renderWorkbookHTML(workbook, { title });
+
+      const preview = $("preview");
+      preview.srcdoc = lastHtml;
+      $("preview-wrap").style.display = "block";
+      $("downloadBtn").style.display = "inline-block";
+      $("status").textContent = "생성 완료!";
+    } catch (e) {
+      console.error(e);
+      $("error").textContent = "오류: " + e.message;
+      $("status").textContent = "";
+    } finally {
+      $("generateBtn").disabled = false;
+    }
+  });
+
+  $("downloadBtn").addEventListener("click", async () => {
+    $("downloadBtn").disabled = true;
+    $("status").textContent = "PDF 변환 중...";
+    try {
+      const res = await fetch("api/render-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: lastHtml,
+          filename: (($("title").value.trim() || "workbook")) + ".pdf",
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (($("title").value.trim() || "workbook")) + ".pdf";
+      a.click();
+      URL.revokeObjectURL(url);
+      $("status").textContent = "PDF 다운로드 완료";
+    } catch (e) {
+      $("error").textContent = "PDF 변환 오류: " + e.message;
+    } finally {
+      $("downloadBtn").disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
