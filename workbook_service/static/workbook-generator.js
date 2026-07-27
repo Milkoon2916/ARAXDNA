@@ -264,21 +264,12 @@ function splitParagraphs(passage) {
   return merged;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export async function generateStep3({ passage, apiKey, model = DEFAULT_MODEL, onParagraphProgress }) {
+export async function generateStep3({ passage, apiKey, model = DEFAULT_MODEL }) {
   const paragraphs = splitParagraphs(passage);
 
-  // 문단이 여러 개면 동시에 병렬 호출하지 않고 순차 + 약간의 딜레이를 둬서
-  // 무료 등급 분당 요청 한도(429)에 걸릴 위험을 줄인다.
-  const results = [];
-  for (let idx = 0; idx < paragraphs.length; idx++) {
-    const paragraphText = paragraphs[idx];
-    onParagraphProgress && onParagraphProgress({ index: idx + 1, total: paragraphs.length });
-
-    const prompt = `
+  const results = await Promise.all(
+    paragraphs.map((paragraphText, idx) => {
+      const prompt = `
 다음은 지문의 한 문단입니다. 이 문단을 문장 단위로 분리한 뒤, 순서를 무작위로 섞어서 제시하세요.
 학생은 섞인 문장을 원래 순서대로 재배열하는 문제를 풀게 됩니다.
 
@@ -291,33 +282,31 @@ export async function generateStep3({ passage, apiKey, model = DEFAULT_MODEL, on
 ${paragraphText}
 `.trim();
 
-    const r = await callGemini({
-      apiKey,
-      model,
-      prompt,
-      schema: {
-        type: "OBJECT",
-        properties: {
-          correct_order: { type: "ARRAY", items: { type: "STRING" } },
-          shuffled_sentences: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                display_id: { type: "STRING" },
-                text: { type: "STRING" },
+      return callGemini({
+        apiKey,
+        model,
+        prompt,
+        schema: {
+          type: "OBJECT",
+          properties: {
+            correct_order: { type: "ARRAY", items: { type: "STRING" } },
+            shuffled_sentences: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  display_id: { type: "STRING" },
+                  text: { type: "STRING" },
+                },
+                propertyOrdering: ["display_id", "text"],
               },
-              propertyOrdering: ["display_id", "text"],
             },
           },
+          propertyOrdering: ["correct_order", "shuffled_sentences"],
         },
-        propertyOrdering: ["correct_order", "shuffled_sentences"],
-      },
-    });
-
-    results.push({ paragraph_id: idx + 1, ...r });
-    if (idx < paragraphs.length - 1) await sleep(1200);
-  }
+      }).then((r) => ({ paragraph_id: idx + 1, ...r }));
+    })
+  );
 
   return { sets: results };
 }
@@ -364,66 +353,36 @@ ${passage}
 }
 
 // ---------------------------------------------------------
-// 8. 전체 워크북 생성 (선택한 단계만 호출)
+// 8. 전체 워크북 생성 (4단계 한 번에)
 // ---------------------------------------------------------
-// selectedSteps: 예) [1,2,4]  → 화면/PDF에 실제로 포함할 단계 번호 배열.
-// 기본값은 4단계 전부 (기존 동작과 동일하게 유지).
-export async function generateWorkbook({
-  passage,
-  apiKey,
-  model = DEFAULT_MODEL,
-  selectedSteps = [1, 2, 3, 4],
-  onProgress,
-}) {
+export async function generateWorkbook({ passage, apiKey, model = DEFAULT_MODEL, onProgress }) {
   const report = (step) => onProgress && onProgress(step);
-  const wants = (n) => selectedSteps.includes(n);
 
-  // 2단계는 1단계의 문장 매핑(en/ko)이 있어야 정확도가 높고, 렌더러가 2단계 아래에
-  // 한글 해석을 같이 보여주므로, 2단계를 선택했다면 1단계를 화면에 안 보여줘도
-  // 내부적으로는 조용히 한 번 생성해서 데이터만 사용한다.
-  const needStep1Data = wants(1) || wants(2);
+  report({ step: 1, status: "start" });
+  const step1 = await generateStep1({ passage, apiKey, model });
+  report({ step: 1, status: "done" });
 
-  let step1 = null;
-  if (needStep1Data) {
-    report({ step: 1, status: "start" });
-    step1 = await generateStep1({ passage, apiKey, model });
-    report({ step: 1, status: "done" });
-    if (wants(2) || wants(3) || wants(4)) await sleep(800);
-  }
+  report({ step: 2, status: "start" });
+  const step2 = await generateStep2({
+    passage,
+    apiKey,
+    model,
+    sentenceMap: step1.sentences,
+  });
+  report({ step: 2, status: "done" });
 
-  let step2 = null;
-  if (wants(2)) {
-    report({ step: 2, status: "start" });
-    step2 = await generateStep2({
-      passage,
-      apiKey,
-      model,
-      sentenceMap: step1 ? step1.sentences : undefined,
-    });
-    report({ step: 2, status: "done" });
-    if (wants(3) || wants(4)) await sleep(800);
-  }
+  report({ step: 3, status: "start" });
+  const step3 = await generateStep3({ passage, apiKey, model });
+  report({ step: 3, status: "done" });
 
-  let step3 = null;
-  if (wants(3)) {
-    report({ step: 3, status: "start" });
-    step3 = await generateStep3({ passage, apiKey, model });
-    report({ step: 3, status: "done" });
-    if (wants(4)) await sleep(800);
-  }
-
-  let step4 = null;
-  if (wants(4)) {
-    report({ step: 4, status: "start" });
-    step4 = await generateStep4({ passage, apiKey, model });
-    report({ step: 4, status: "done" });
-  }
+  report({ step: 4, status: "start" });
+  const step4 = await generateStep4({ passage, apiKey, model });
+  report({ step: 4, status: "done" });
 
   return {
     passage,
     model,
-    selectedSteps: [1, 2, 3, 4].filter(wants), // 실제로 화면/PDF에 표시할 단계
-    step1_translation: step1, // wants(1)이 false여도 2단계용 데이터로 존재할 수 있음
+    step1_translation: step1,
     step2_blanks: step2,
     step3_ordering: step3,
     step4_unscramble: step4,

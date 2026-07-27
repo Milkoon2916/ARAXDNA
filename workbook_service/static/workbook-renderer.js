@@ -211,53 +211,40 @@ function renderStep4(step4) {
 }
 
 // ---------------------------------------------------------
-// 정답지 렌더링 (선택된 단계에 해당하는 섹션만 포함)
+// 정답지 렌더링
 // ---------------------------------------------------------
-function renderAnswerKey(workbook, steps) {
+function renderAnswerKey(workbook) {
   const { step1_translation, step2_blanks, step3_ordering, step4_unscramble } = workbook;
 
-  const sections = [];
+  const step1List = step1_translation.sentences
+    .map((s) => `<li>${s.id}. ${escapeHtml(s.ko)}</li>`)
+    .join("");
 
-  if (steps.includes(1) && step1_translation) {
-    const step1List = step1_translation.sentences
-      .map((s) => `<li>${s.id}. ${escapeHtml(s.ko)}</li>`)
-      .join("");
-    sections.push(`<div class="ak-section"><h3>STEP 1 해석</h3><ol>${step1List}</ol></div>`);
-  }
+  const step2List = step2_blanks.sentences
+    .filter((s) => s.blanks && s.blanks.length > 0)
+    .map((s) => {
+      const answers = s.blanks
+        .map((b) => `<b>${escapeHtml(b.answer)}</b>`)
+        .join(", ");
+      return `<li>${s.sentence_id}. ${answers}</li>`;
+    })
+    .join("");
 
-  if (steps.includes(2) && step2_blanks) {
-    const step2List = step2_blanks.sentences
-      .filter((s) => s.blanks && s.blanks.length > 0)
-      .map((s) => {
-        const answers = s.blanks
-          .map((b) => `<b>${escapeHtml(b.answer)}</b>`)
-          .join(", ");
-        return `<li>${s.sentence_id}. ${answers}</li>`;
-      })
-      .join("");
-    sections.push(`<div class="ak-section"><h3>STEP 2 빈칸</h3><ol>${step2List}</ol></div>`);
-  }
+  const step3List = step3_ordering.sets
+    .map((set) => `<li>문단 ${set.paragraph_id}: ${set.correct_order.join(" → ")}</li>`)
+    .join("");
 
-  if (steps.includes(3) && step3_ordering) {
-    const step3List = step3_ordering.sets
-      .map((set) => `<li>문단 ${set.paragraph_id}: ${set.correct_order.join(" → ")}</li>`)
-      .join("");
-    sections.push(`<div class="ak-section"><h3>STEP 3 순서 배열</h3><ol>${step3List}</ol></div>`);
-  }
-
-  if (steps.includes(4) && step4_unscramble) {
-    const step4List = step4_unscramble.unscramble
-      .map((u) => `<li>${u.sentence_id}. ${escapeHtml(u.correct_chunks.join(" "))}</li>`)
-      .join("");
-    sections.push(`<div class="ak-section"><h3>STEP 4 어순 배열</h3><ol>${step4List}</ol></div>`);
-  }
-
-  if (sections.length === 0) return "";
+  const step4List = step4_unscramble.unscramble
+    .map((u) => `<li>${u.sentence_id}. ${escapeHtml(u.correct_chunks.join(" "))}</li>`)
+    .join("");
 
   return `
     <section class="answer-key">
       <h2>정답 (교사용)</h2>
-      ${sections.join("\n")}
+      <div class="ak-section"><h3>STEP 1 해석</h3><ol>${step1List}</ol></div>
+      <div class="ak-section"><h3>STEP 2 빈칸</h3><ol>${step2List}</ol></div>
+      <div class="ak-section"><h3>STEP 3 순서 배열</h3><ol>${step3List}</ol></div>
+      <div class="ak-section"><h3>STEP 4 어순 배열</h3><ol>${step4List}</ol></div>
     </section>`;
 }
 
@@ -265,25 +252,13 @@ function renderAnswerKey(workbook, steps) {
 // 전체 문서 렌더링
 // ---------------------------------------------------------
 export function renderWorkbookHTML(workbook, { title = "영어 지문 워크북", includeAnswerKey = true } = {}) {
-  // workbook.selectedSteps가 있으면 그걸 따르고, 없으면(과거 데이터 호환) 4단계 전부 표시
-  const steps = workbook.selectedSteps || [1, 2, 3, 4];
-
-  const sectionRenderers = {
-    1: () => (workbook.step1_translation ? renderStep1(workbook.step1_translation) : ""),
-    2: () =>
-      workbook.step1_translation && workbook.step2_blanks
-        ? renderStep2(workbook.step1_translation, workbook.step2_blanks)
-        : "",
-    3: () => (workbook.step3_ordering ? renderStep3(workbook.step3_ordering) : ""),
-    4: () => (workbook.step4_unscramble ? renderStep4(workbook.step4_unscramble) : ""),
-  };
-
   const body = [
-    ...steps.map((n) => sectionRenderers[n] && sectionRenderers[n]()),
-    includeAnswerKey ? renderAnswerKey(workbook, steps) : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    renderStep1(workbook.step1_translation),
+    renderStep2(workbook.step1_translation, workbook.step2_blanks),
+    renderStep3(workbook.step3_ordering),
+    renderStep4(workbook.step4_unscramble),
+    includeAnswerKey ? renderAnswerKey(workbook) : "",
+  ].join("\n");
 
   return `<!DOCTYPE html>
 <html lang="ko">

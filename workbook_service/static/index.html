@@ -27,19 +27,6 @@
   .hint { font-size:11px; color:#777; margin-top:2px; }
   .hint a { color:#0070C0; font-weight:700; text-decoration:none; }
   .hint a:hover { text-decoration:underline; }
-
-  .step-picker {
-    display:flex; flex-wrap:wrap; gap: 8px; margin-top: 6px;
-  }
-  .step-picker label {
-    display:flex; align-items:center; gap: 6px; font-weight:400; margin:0;
-    border: 1px solid #ccc; border-radius: 6px; padding: 8px 12px; font-size: 13px;
-    cursor:pointer; user-select:none; background:#fafafa;
-  }
-  .step-picker label.checked { border-color:#111; background:#f0f0f0; font-weight:700; }
-  .step-picker input { margin:0; }
-  .step-picker-all { font-size:12px; color:#0070C0; cursor:pointer; margin-left:8px; text-decoration:underline; }
-  #stepError { color:#C00000; font-size:12px; margin-top:4px; min-height:16px; }
 </style>
 </head>
 <body>
@@ -62,18 +49,6 @@
       <input type="text" id="title" placeholder="예: 3월 모의고사 34번 지문" />
     </div>
   </div>
-
-  <label>
-    생성할 단계 선택
-    <span class="step-picker-all" id="selectAllSteps">전체 선택</span>
-  </label>
-  <div class="step-picker" id="stepPicker">
-    <label data-step="1"><input type="checkbox" class="step-check" value="1" checked /> STEP 1 해석하기</label>
-    <label data-step="2"><input type="checkbox" class="step-check" value="2" checked /> STEP 2 빈칸 채우기</label>
-    <label data-step="3"><input type="checkbox" class="step-check" value="3" checked /> STEP 3 문장 순서 배열</label>
-    <label data-step="4"><input type="checkbox" class="step-check" value="4" checked /> STEP 4 언스크램블</label>
-  </div>
-  <div id="stepError"></div>
 
   <label for="passage">지문 (영어 원문)</label>
   <textarea id="passage" placeholder="여기에 영어 지문을 붙여넣으세요..."></textarea>
@@ -109,46 +84,15 @@
 
   let lastHtml = "";
 
-  // ---- 단계 선택 체크박스 ----
-  const stepChecks = Array.from(document.querySelectorAll(".step-check"));
-
-  function getSelectedSteps() {
-    return stepChecks
-      .filter((cb) => cb.checked)
-      .map((cb) => parseInt(cb.value, 10))
-      .sort((a, b) => a - b);
-  }
-
-  function syncStepLabelStyles() {
-    stepChecks.forEach((cb) => {
-      cb.closest("label").classList.toggle("checked", cb.checked);
-    });
-  }
-  stepChecks.forEach((cb) => cb.addEventListener("change", () => {
-    syncStepLabelStyles();
-    $("stepError").textContent = "";
-  }));
-  syncStepLabelStyles();
-
-  $("selectAllSteps").addEventListener("click", () => {
-    const allChecked = stepChecks.every((cb) => cb.checked);
-    stepChecks.forEach((cb) => (cb.checked = !allChecked));
-    syncStepLabelStyles();
-    $("stepError").textContent = "";
-  });
-
   $("generateBtn").addEventListener("click", async () => {
     const apiKey = $("apiKey").value.trim();
     const passage = $("passage").value.trim();
     const model = modelSelect.value;
     const title = $("title").value.trim() || "영어 지문 워크북";
-    const selectedSteps = getSelectedSteps();
 
     $("error").textContent = "";
-    $("stepError").textContent = "";
     if (!apiKey) return ($("error").textContent = "Gemini API 키를 입력하세요.");
     if (!passage) return ($("error").textContent = "지문을 입력하세요.");
-    if (selectedSteps.length === 0) return ($("stepError").textContent = "단계를 하나 이상 선택하세요.");
 
     localStorage.setItem("gemini_api_key", apiKey);
 
@@ -163,7 +107,6 @@
         passage,
         apiKey,
         model,
-        selectedSteps,
         onProgress: ({ step, status }) => {
           $("status").textContent =
             status === "start"
