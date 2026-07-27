@@ -7,12 +7,13 @@ Render 하나에 올리면 도메인 하나에서 4개 도구가 전부 동작�
 
 | 경로 | 도구 |
 |---|---|
-| `/` | 허브 랜딩 페이지 |
-| `/passage-analyzer/` | 구문분석 자동 생성기 (PDF) |
-| `/comprehension/` | O/X 리딩 워크북 메이커 |
-| `/combined/` | 지문 1번으로 구문분석+OX 동시 생성 |
-| `/workbook/` | 단어시험지 워크북 생성기 (PDF) — 기존 WB 레포 |
-| `/voca/` | ARA Vocab AI (단어장·단어시험·정답지) — 기존 VOCA 레포 |
+| `/` | 허브 랜딩 페이지 (all-in-one으로 바로 연결) |
+| `/all-in-one/` | 지문 1번으로 4개 도구(구문분석+OX+워크북+VOCA) 전부 동시 생성, 원하는 도구만 체크 가능 |
+| `/workbook/api/render-pdf`, `/voca/analyze` 등 | `all-in-one`이 내부적으로 호출하는 백엔드 API (직접 방문용 화면 아님) |
+
+> `/passage-analyzer/`, `/comprehension/`, `/combined/` 단독 화면은 `all-in-one`에서 도구별 체크박스로
+> 전부 대체되어 제거했습니다. `/workbook/`, `/voca/` 앱 자체는 각 도구의 PDF 렌더링 API를 제공하므로
+> 서버에는 그대로 남아 있지만, 랜딩 페이지에서는 더 이상 링크하지 않습니다.
 
 ## 어떻게 합쳤나
 
@@ -53,11 +54,10 @@ uvicorn app.main:app --reload --port 8000
 
 ## 확인 완료 (로컬 스모크 테스트)
 
-- `GET /` → 200
-- `GET /passage-analyzer/` → 200
-- `GET /comprehension/` → 200
-- `GET /workbook/` → 200 (내부 `fetch("api/render-pdf")` 상대경로 확인)
-- `GET /voca/` → 200 (내부 `href="static/style.css"`, `action="analyze"` 상대경로 확인)
+- `GET /` → 200 (all-in-one으로 안내)
+- `GET /all-in-one/` → 200
+- `POST /workbook/api/render-pdf` → 200 (all-in-one이 내부적으로 호출)
+- `POST /voca/analyze` → 200 (all-in-one이 내부적으로 호출)
 
 ## 남은 선택 사항 (원하시면 다음 단계로 진행)
 
