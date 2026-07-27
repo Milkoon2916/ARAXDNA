@@ -206,6 +206,38 @@ function stripCodeFence(text){
   return t;
 }
 
+// 429(쿼터 초과)/503(과부하) 응답이면 재시도 대기시간을 읽어서 기다렸다가 자동 재시도한다.
+function parseRetryDelayMs(errJson){
+  const details = errJson?.error?.details || [];
+  const retryInfo = details.find(d => String(d['@type'] || '').includes('RetryInfo'));
+  const raw = retryInfo?.retryDelay;
+  if (raw) {
+    const secs = parseFloat(String(raw).replace('s', ''));
+    if (!Number.isNaN(secs)) return Math.ceil(secs * 1000) + 1000;
+  }
+  return null;
+}
+
+async function fetchGeminiWithRetry(url, options, onStatus, maxRetries = 4){
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, options);
+    if (res.ok || (res.status !== 429 && res.status !== 503) || attempt >= maxRetries) return res;
+    let waitMs = res.status === 429 ? 20000 : 5000;
+    try {
+      const errJson = await res.clone().json();
+      const parsed = parseRetryDelayMs(errJson);
+      if (parsed) waitMs = parsed;
+    } catch (e) { /* 기본 대기시간 사용 */ }
+    if (onStatus) {
+      onStatus(res.status === 429
+        ? `Gemini 요청 한도(429)에 걸렸어요. ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${maxRetries})`
+        : `Gemini 서버가 잠시 과부하 상태예요(503). ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${maxRetries})`);
+    }
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+}
+
 // 지문을 실제로 문장 단위 배열로 쪼갬 (흔한 약어의 마침표는 문장 끝으로 취급하지 않음).
 // 이렇게 미리 나눈 목록을 프롬프트에 [번호]로 그대로 넘겨서, 모델이 "몇 문장인지 스스로 세는"
 // 일 자체를 하지 않게 만든다 -- 개수가 틀릴 여지를 원천적으로 없앰.
@@ -246,7 +278,7 @@ function splitSentences(text){
 }
 
 // ---- 구문분석 (지문 1개당 1번 호출, 결과를 모아서 PDF 1개로 합침) ----
-async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList){
+async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList, onStatus){
   const lines = [`다음 지문을 분석해줘 (지문 번호: ${passageIndex}):`];
   if (source && source.trim()) lines.push(`지문 출처: ${source.trim()}`);
   if (targetGrammar && targetGrammar.trim()) lines.push(`목표 어법: ${targetGrammar.trim()}`);
@@ -258,7 +290,7 @@ async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, pas
   lines.push(passageText.trim());
   const userMessage = lines.join('\n');
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+  const res = await fetchGeminiWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -271,7 +303,7 @@ async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, pas
         thinkingConfig: { thinkingBudget: 2048 }
       }
     })
-  });
+  }, onStatus);
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody?.error?.message || `Gemini API 오류 (${res.status})`);
@@ -287,12 +319,12 @@ async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, pas
 async function analyzeOnePassageWithRetry(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, onStatus){
   const sentenceList = splitSentences(passageText);
   const expected = sentenceList.length;
-  let result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList);
+  let result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList, onStatus);
   let actual = result.sentences ? result.sentences.length : 0;
 
   if (actual !== expected) {
     onStatus(`지문 ${passageIndex}: 문장 수가 안 맞아요 (실제 ${expected}문장 / 분석 ${actual}문장) — 다시 시도하는 중...`);
-    result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList);
+    result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList, onStatus);
     actual = result.sentences ? result.sentences.length : 0;
   }
 
@@ -382,16 +414,16 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-async function runOxForOnePassage(apiKey, model, passageText, numKo, numEn){
+async function runOxForOnePassage(apiKey, model, passageText, numKo, numEn, onStatus){
   const system = buildOxSystemPrompt(numKo, numEn);
-  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+  const resp = await fetchGeminiWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: passageText }] }]
     })
-  });
+  }, onStatus);
   const data = await resp.json();
   if (!resp.ok) throw new Error(data?.error?.message || 'API 요청이 실패했습니다.');
   let text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
@@ -500,7 +532,10 @@ async function runOxBatch(apiKey, model, passages, numKo, numEn){
     oxContainer.appendChild(card);
 
     try {
-      const parsed = await runOxForOnePassage(apiKey, model, p.text, numKo, numEn);
+      const parsed = await runOxForOnePassage(apiKey, model, p.text, numKo, numEn, (msg) => {
+        const statusEl = card.querySelector('.ox-status');
+        if (statusEl) statusEl.textContent = msg;
+      });
       card.querySelector('.ox-status').remove();
       const src = p.source && p.source.trim() ? p.source.trim() : '';
       card.insertAdjacentHTML('beforeend', buildOxSheetHtml(parsed, p.text, src));

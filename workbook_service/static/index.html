@@ -107,11 +107,11 @@
         passage,
         apiKey,
         model,
-        onProgress: ({ step, status }) => {
+        onProgress: ({ step, status, message }) => {
           $("status").textContent =
-            status === "start"
-              ? `STEP ${step} (${stepLabels[step]}) 생성 중...`
-              : `STEP ${step} (${stepLabels[step]}) 완료`;
+            status === "start" ? `STEP ${step} (${stepLabels[step]}) 생성 중...`
+            : status === "retry" ? message
+            : `STEP ${step} (${stepLabels[step]}) 완료`;
         },
       });
 

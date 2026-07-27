@@ -30,6 +30,15 @@
   .global-row > div{flex:1;}
   @media (max-width:600px){.global-row{flex-direction:column;}}
 
+  .tool-check-group{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:8px;}
+  @media (max-width:600px){.tool-check-group{grid-template-columns:1fr;}}
+  .tool-check{display:flex;align-items:flex-start;gap:10px;background:var(--card);border:1px solid var(--rule);
+    border-radius:6px;padding:12px 14px;cursor:pointer;}
+  .tool-check input{width:auto;margin-top:2px;flex:0 0 auto;}
+  .tool-check .tc-body b{font-size:13.5px;display:block;}
+  .tool-check .tc-body span{font-size:11.5px;color:#8a7a86;}
+  .tool-check.disabled{opacity:.45;}
+
   .section-title{font-family:"Courier New",monospace;font-size:12px;font-weight:bold;color:var(--pink-dark);
     text-transform:uppercase;letter-spacing:.08em;margin:36px 0 4px;border-top:1px solid var(--rule);padding-top:20px;}
   .section-hint{font-size:12.5px;color:#8a7a86;margin:0 0 4px;}
@@ -149,34 +158,54 @@
     </div>
   </div>
 
+  <label>생성할 도구 선택</label>
+  <div class="tool-check-group">
+    <label class="tool-check">
+      <input type="checkbox" id="toolAnalysis" checked>
+      <span class="tc-body"><b>📄 구문분석</b><span>문장별 구문분석 + 번역 PDF (합본 1개)</span></span>
+    </label>
+    <label class="tool-check">
+      <input type="checkbox" id="toolOx" checked>
+      <span class="tc-body"><b>✅ OX 리딩 워크북</b><span>지문별 O/X 내용일치 문항</span></span>
+    </label>
+    <label class="tool-check">
+      <input type="checkbox" id="toolWorkbook" checked>
+      <span class="tc-body"><b>📝 단어시험지 워크북</b><span>지문별 해석·빈칸·순서·언스크램블</span></span>
+    </label>
+    <label class="tool-check">
+      <input type="checkbox" id="toolVoca" checked>
+      <span class="tc-body"><b>📚 VOCA 어휘 분석</b><span>지문별 핵심 어휘 추출</span></span>
+    </label>
+  </div>
+
   <div id="passageList"></div>
   <button id="addPassage" type="button">+ 지문 추가 (최대 5개)</button>
 
-  <button id="go">4개 도구 전부 생성하기</button>
+  <button id="go">선택한 도구 생성하기</button>
   <div class="status" id="status"></div>
   <div class="err" id="err"></div>
 
   <div class="results" id="results">
-    <div class="results-group">
+    <div class="results-group" data-group="analysis">
       <h3 class="group-h">📄 구문분석 PDF (지문 전체 합본)</h3>
       <div class="result-card" id="pdfCard">
         <p id="pdfStatus">대기 중...</p>
       </div>
     </div>
 
-    <div class="results-group">
+    <div class="results-group" data-group="ox">
       <h3 class="group-h">✅ OX 리딩 워크북</h3>
       <p class="group-p">지문별로 하나씩 만들어집니다. 각 카드에서 정답 확인 후 PDF로 다운로드하세요.</p>
       <div id="oxContainer"></div>
     </div>
 
-    <div class="results-group">
+    <div class="results-group" data-group="workbook">
       <h3 class="group-h">📝 단어시험지 워크북</h3>
       <p class="group-p">지문별로 하나씩 만들어집니다. 미리보기 후 PDF로 다운로드하세요.</p>
       <div id="workbookContainer"></div>
     </div>
 
-    <div class="results-group">
+    <div class="results-group" data-group="voca">
       <h3 class="group-h">📚 VOCA 어휘 분석</h3>
       <p class="group-p">지문별로 자동 분석되어 아래 화면에 바로 표시됩니다. 화면 안의 버튼으로 단어장 PDF/DOCX 다운로드,
         이어서 단어시험지까지 만들 수 있어요.</p>
@@ -186,7 +215,71 @@
 </div>
 
 <script>
+/* =========================================================
+   Gemini 요청 전역 큐 + 429(RESOURCE_EXHAUSTED) 자동 재시도
+   ---------------------------------------------------------
+   무료 등급은 분당 요청 수 제한이 아주 낮습니다(모델당 RPM 5 수준).
+   이 페이지는 구문분석 + OX + 단어시험지 3개 도구가 동시에 각자 Gemini를
+   호출하기 때문에, 순서를 안 정해두면 금방 429가 납니다.
+   그래서 모든 Gemini 호출(analysis, OX, workbook-generator.js 내부 호출 포함)을
+   한 줄로 세우고, 429가 나면 서버가 알려주는 재시도 대기시간만큼 기다렸다가
+   자동으로 다시 시도합니다. (다른 서버 호출 /render, /workbook/api/render-pdf,
+   /voca/analyze 등에는 영향 없음 — Gemini 도메인 요청만 가로챕니다.)
+   ========================================================= */
+(function () {
+  const originalFetch = window.fetch.bind(window);
+  let queueTail = Promise.resolve();
+  const MIN_GAP_MS = 1200;
+  const MAX_RETRIES = 6;
+  const DEFAULT_RETRY_MS = 15000;
+
+  function isGeminiUrl(input) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    return url.includes('generativelanguage.googleapis.com');
+  }
+
+  function parseRetryDelayMs(bodyText) {
+    try {
+      const data = JSON.parse(bodyText);
+      const details = data?.error?.details || [];
+      const detail = details.find(d => (d['@type'] || '').includes('RetryInfo'));
+      const raw = detail?.retryDelay; // 예: "42s"
+      if (raw) {
+        const sec = parseFloat(String(raw).replace('s', ''));
+        if (!isNaN(sec)) return Math.ceil(sec * 1000) + 500;
+      }
+    } catch (e) { /* 파싱 실패 시 기본값 사용 */ }
+    return DEFAULT_RETRY_MS;
+  }
+
+  window.fetch = function (input, init) {
+    if (!isGeminiUrl(input)) return originalFetch(input, init);
+
+    const run = async () => {
+      await new Promise(r => setTimeout(r, MIN_GAP_MS));
+      let lastResp = null;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const resp = await originalFetch(input, init);
+        if (resp.status !== 429) return resp;
+        lastResp = resp;
+        const bodyText = await resp.clone().text();
+        const waitMs = parseRetryDelayMs(bodyText);
+        if (typeof window.__geminiRateStatus === 'function') {
+          window.__geminiRateStatus(`Gemini API 사용량 제한(429) — ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${MAX_RETRIES})`);
+        }
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+      return lastResp;
+    };
+
+    const task = queueTail.then(run, run);
+    queueTail = task.catch(() => {}); // 큐는 이전 요청이 실패해도 계속 이어짐
+    return task;
+  };
+})();
+
 const MAX_PASSAGES = 5;
+
 const apiKeyEl = document.getElementById('apiKey');
 const KEY_STORAGE = 'araxdna-gemini-key';
 apiKeyEl.value = localStorage.getItem(KEY_STORAGE) || '';
@@ -256,6 +349,38 @@ function stripCodeFence(text){
   return t;
 }
 
+// 429(쿼터 초과)/503(과부하) 응답이면 재시도 대기시간을 읽어서 기다렸다가 자동 재시도한다.
+function parseRetryDelayMs(errJson){
+  const details = errJson?.error?.details || [];
+  const retryInfo = details.find(d => String(d['@type'] || '').includes('RetryInfo'));
+  const raw = retryInfo?.retryDelay;
+  if (raw) {
+    const secs = parseFloat(String(raw).replace('s', ''));
+    if (!Number.isNaN(secs)) return Math.ceil(secs * 1000) + 1000;
+  }
+  return null;
+}
+
+async function fetchGeminiWithRetry(url, options, onStatus, maxRetries = 4){
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, options);
+    if (res.ok || (res.status !== 429 && res.status !== 503) || attempt >= maxRetries) return res;
+    let waitMs = res.status === 429 ? 20000 : 5000;
+    try {
+      const errJson = await res.clone().json();
+      const parsed = parseRetryDelayMs(errJson);
+      if (parsed) waitMs = parsed;
+    } catch (e) { /* 기본 대기시간 사용 */ }
+    if (onStatus) {
+      onStatus(res.status === 429
+        ? `Gemini 요청 한도(429)에 걸렸어요. ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${maxRetries})`
+        : `Gemini 서버가 잠시 과부하 상태예요(503). ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${maxRetries})`);
+    }
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+}
+
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -294,7 +419,7 @@ function splitSentences(text){
 /* =========================================================
    1) 구문분석 (지문 1개당 1번 호출, 결과를 모아서 PDF 1개로 합침)
    ========================================================= */
-async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList){
+async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList, onStatus){
   const lines = [`다음 지문을 분석해줘 (지문 번호: ${passageIndex}):`];
   if (source && source.trim()) lines.push(`지문 출처: ${source.trim()}`);
   if (targetGrammar && targetGrammar.trim()) lines.push(`목표 어법: ${targetGrammar.trim()}`);
@@ -306,7 +431,7 @@ async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, pas
   lines.push(passageText.trim());
   const userMessage = lines.join('\n');
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+  const res = await fetchGeminiWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -319,7 +444,7 @@ async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, pas
         thinkingConfig: { thinkingBudget: 2048 }
       }
     })
-  });
+  }, onStatus);
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody?.error?.message || `Gemini API 오류 (${res.status})`);
@@ -335,12 +460,12 @@ async function callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, pas
 async function analyzeOnePassageWithRetry(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, onStatus){
   const sentenceList = splitSentences(passageText);
   const expected = sentenceList.length;
-  let result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList);
+  let result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList, onStatus);
   let actual = result.sentences ? result.sentences.length : 0;
 
   if (actual !== expected) {
     onStatus(`지문 ${passageIndex}: 문장 수가 안 맞아요 (실제 ${expected}문장 / 분석 ${actual}문장) — 다시 시도하는 중...`);
-    result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList);
+    result = await callGeminiForAnalysis(apiKey, systemPrompt, model, maxTokens, passageText, passageIndex, source, targetGrammar, responseJsonSchema, sentenceList, onStatus);
     actual = result.sentences ? result.sentences.length : 0;
   }
 
@@ -428,16 +553,16 @@ Rules for both groups:
 groupA must have exactly ${numKo} items numbered 01-${lastKo}. groupB must have exactly ${numEn} items numbered ${firstEn}-${lastEn}.`;
 }
 
-async function runOxForOnePassage(apiKey, model, passageText, numKo, numEn){
+async function runOxForOnePassage(apiKey, model, passageText, numKo, numEn, onStatus){
   const system = buildOxSystemPrompt(numKo, numEn);
-  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+  const resp = await fetchGeminiWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: passageText }] }]
     })
-  });
+  }, onStatus);
   const data = await resp.json();
   if (!resp.ok) throw new Error(data?.error?.message || 'API 요청이 실패했습니다.');
   let text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
@@ -538,7 +663,10 @@ async function runOxBatch(apiKey, model, passages, numKo, numEn){
     card.innerHTML = `<h4>${escapeHtml(label)}</h4><p class="ox-status">생성 중…</p>`;
     oxContainer.appendChild(card);
     try {
-      const parsed = await runOxForOnePassage(apiKey, model, p.text, numKo, numEn);
+      const parsed = await runOxForOnePassage(apiKey, model, p.text, numKo, numEn, (msg) => {
+        const statusEl = card.querySelector('.ox-status');
+        if (statusEl) statusEl.textContent = msg;
+      });
       const src = p.source && p.source.trim() ? p.source.trim() : '';
       card.querySelector('.ox-status').remove();
       card.insertAdjacentHTML('beforeend', buildOxSheetHtml(parsed, p.text, src));
@@ -570,9 +698,11 @@ async function runWorkbookBatch(apiKey, model, passages){
     try {
       const workbook = await generateWorkbook({
         passage: p.text, apiKey, model,
-        onProgress: ({ step, status }) => {
+        onProgress: ({ step, status, message }) => {
           card.querySelector('.wb-status').textContent =
-            status === 'start' ? `STEP ${step} (${stepLabels[step]}) 생성 중...` : `STEP ${step} (${stepLabels[step]}) 완료`;
+            status === 'start' ? `STEP ${step} (${stepLabels[step]}) 생성 중...`
+            : status === 'retry' ? message
+            : `STEP ${step} (${stepLabels[step]}) 완료`;
         },
       });
       const title = label;
@@ -676,6 +806,16 @@ async function runVocaBatch(apiKey, level, count, passages){
 /* =========================================================
    전체 실행
    ========================================================= */
+const toolCheckboxes = ['toolAnalysis', 'toolOx', 'toolWorkbook', 'toolVoca'].map(id => document.getElementById(id));
+const goBtnEl = document.getElementById('go');
+function updateGoButtonLabel(){
+  const n = toolCheckboxes.filter(cb => cb.checked).length;
+  goBtnEl.textContent = n === 0 ? '도구를 최소 1개 선택해주세요' : n === 4 ? '4개 도구 전부 생성하기' : `선택한 도구 ${n}개 생성하기`;
+  goBtnEl.disabled = n === 0;
+}
+toolCheckboxes.forEach(cb => cb.addEventListener('change', updateGoButtonLabel));
+updateGoButtonLabel();
+
 document.getElementById('go').addEventListener('click', async () => {
   const apiKey = apiKeyEl.value.trim();
   const model = document.getElementById('modelSelect').value;
@@ -687,6 +827,13 @@ document.getElementById('go').addEventListener('click', async () => {
   const errEl = document.getElementById('err');
   const goBtn = document.getElementById('go');
 
+  window.__geminiRateStatus = (msg) => { statusEl.textContent = msg; };
+
+  const wantAnalysis = document.getElementById('toolAnalysis').checked;
+  const wantOx = document.getElementById('toolOx').checked;
+  const wantWorkbook = document.getElementById('toolWorkbook').checked;
+  const wantVoca = document.getElementById('toolVoca').checked;
+
   const blocks = [...passageList.querySelectorAll('.passage-block')];
   const passages = blocks.map(b => ({
     source: b.querySelector('.p-source').value,
@@ -696,22 +843,33 @@ document.getElementById('go').addEventListener('click', async () => {
 
   errEl.style.display = 'none';
   if (!apiKey) { errEl.textContent = 'Gemini API 키를 입력해주세요.'; errEl.style.display = 'block'; return; }
+  if (!wantAnalysis && !wantOx && !wantWorkbook && !wantVoca) { errEl.textContent = '도구를 최소 1개는 선택해주세요.'; errEl.style.display = 'block'; return; }
   if (passages.length === 0) { errEl.textContent = '지문을 최소 1개는 입력해주세요.'; errEl.style.display = 'block'; return; }
   if (passages.length > MAX_PASSAGES) { errEl.textContent = `지문은 최대 ${MAX_PASSAGES}개까지만 가능해요.`; errEl.style.display = 'block'; return; }
 
   goBtn.disabled = true;
-  statusEl.textContent = `지문 ${passages.length}개로 4개 도구를 동시에 생성합니다. 시간이 좀 걸릴 수 있어요...`;
+  const selectedCount = [wantAnalysis, wantOx, wantWorkbook, wantVoca].filter(Boolean).length;
+  statusEl.textContent = `지문 ${passages.length}개로 선택한 도구 ${selectedCount}개를 생성합니다. 시간이 좀 걸릴 수 있어요...`;
+
+  document.querySelector('[data-group="analysis"]').style.display = wantAnalysis ? '' : 'none';
+  document.querySelector('[data-group="ox"]').style.display = wantOx ? '' : 'none';
+  document.querySelector('[data-group="workbook"]').style.display = wantWorkbook ? '' : 'none';
+  document.querySelector('[data-group="voca"]').style.display = wantVoca ? '' : 'none';
   document.getElementById('results').style.display = 'block';
-  document.getElementById('pdfCard').innerHTML = '<p id="pdfStatus">대기 중...</p>';
+  if (wantAnalysis) document.getElementById('pdfCard').innerHTML = '<p id="pdfStatus">대기 중...</p>';
+  if (wantOx) document.getElementById('oxContainer').innerHTML = '';
+  if (wantWorkbook) document.getElementById('workbookContainer').innerHTML = '';
+  if (wantVoca) document.getElementById('vocaContainer').innerHTML = '';
 
-  const results = await Promise.allSettled([
-    runPassageAnalysisBatch(apiKey, model, passages),
-    runOxBatch(apiKey, model, passages, numKo, numEn),
-    runWorkbookBatch(apiKey, model, passages),
-    runVocaBatch(apiKey, vocaLevel, vocaCount, passages),
-  ]);
+  const tasks = [];
+  const labels = [];
+  if (wantAnalysis) { tasks.push(runPassageAnalysisBatch(apiKey, model, passages)); labels.push('구문분석'); }
+  if (wantOx) { tasks.push(runOxBatch(apiKey, model, passages, numKo, numEn)); labels.push('OX 워크북'); }
+  if (wantWorkbook) { tasks.push(runWorkbookBatch(apiKey, model, passages)); labels.push('단어시험지 워크북'); }
+  if (wantVoca) { tasks.push(runVocaBatch(apiKey, vocaLevel, vocaCount, passages)); labels.push('VOCA 어휘 분석'); }
 
-  const labels = ['구문분석', 'OX 워크북', '단어시험지 워크북', 'VOCA 어휘 분석'];
+  const results = await Promise.allSettled(tasks);
+
   const failed = results.map((r, i) => r.status === 'rejected' ? `${labels[i]}: ${r.reason.message}` : null).filter(Boolean);
   if (failed.length > 0) {
     statusEl.textContent = '일부 작업에서 오류가 발생했습니다. 아래 각 영역을 확인해주세요.';
@@ -721,6 +879,7 @@ document.getElementById('go').addEventListener('click', async () => {
     statusEl.textContent = '모두 완료되었습니다!';
   }
   goBtn.disabled = false;
+  updateGoButtonLabel();
 });
 </script>
 </body>

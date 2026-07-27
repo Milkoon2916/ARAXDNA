@@ -45,7 +45,19 @@ const SYSTEM_INSTRUCTION =
 // ---------------------------------------------------------
 // 2. 공통 Gemini 호출 함수
 // ---------------------------------------------------------
-async function callGemini({ apiKey, model, prompt, schema }) {
+// 429(쿼터 초과)/503(서버 과부하) 응답에서 자동으로 재시도 대기 시간을 뽑아 기다렸다가 재시도한다.
+function parseRetryDelayMs(errJson) {
+  const details = errJson?.error?.details || [];
+  const retryInfo = details.find((d) => String(d["@type"] || "").includes("RetryInfo"));
+  const raw = retryInfo?.retryDelay; // 예: "42s"
+  if (raw) {
+    const secs = parseFloat(String(raw).replace("s", ""));
+    if (!Number.isNaN(secs)) return Math.ceil(secs * 1000) + 1000;
+  }
+  return null;
+}
+
+async function callGemini({ apiKey, model, prompt, schema, onStatus, maxRetries = 4 }) {
   const url = `${API_BASE}/${model}:generateContent?key=${apiKey}`;
 
   const body = {
@@ -58,11 +70,32 @@ async function callGemini({ apiKey, model, prompt, schema }) {
     },
   };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok || (res.status !== 429 && res.status !== 503) || attempt >= maxRetries) break;
+
+    let waitMs = res.status === 429 ? 20000 : 5000;
+    try {
+      const errJson = await res.clone().json();
+      const parsed = parseRetryDelayMs(errJson);
+      if (parsed) waitMs = parsed;
+    } catch (e) { /* 파싱 실패 시 기본 대기시간 사용 */ }
+
+    if (onStatus) {
+      onStatus(
+        res.status === 429
+          ? `Gemini 요청 한도(429)에 걸렸어요. ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${maxRetries})`
+          : `Gemini 서버가 잠시 과부하 상태예요(503). ${Math.ceil(waitMs / 1000)}초 후 자동 재시도합니다... (${attempt + 1}/${maxRetries})`
+      );
+    }
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
 
   if (!res.ok) {
     const errText = await res.text();
@@ -104,7 +137,7 @@ const STEP1_SCHEMA = {
   propertyOrdering: ["sentences"],
 };
 
-export async function generateStep1({ passage, apiKey, model = DEFAULT_MODEL }) {
+export async function generateStep1({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
   const prompt = `
 다음 영어 지문을 문장 단위로 분리하고, 각 문장에 대해 자연스러운 한글 해석(직역보다 의역 우선)을 작성하세요.
 문장 id는 1부터 순서대로 매기세요. 인용부호나 콜론으로 인한 문장 내 세부 구분은 하나의 문장으로 취급하세요.
@@ -113,7 +146,7 @@ export async function generateStep1({ passage, apiKey, model = DEFAULT_MODEL }) 
 ${passage}
 `.trim();
 
-  return callGemini({ apiKey, model, prompt, schema: STEP1_SCHEMA });
+  return callGemini({ apiKey, model, prompt, schema: STEP1_SCHEMA, onStatus });
 }
 
 // ---------------------------------------------------------
@@ -170,6 +203,7 @@ export async function generateStep2({
   apiKey,
   model = DEFAULT_MODEL,
   sentenceMap, // 1단계에서 만든 { id, en } 배열을 넘기면 sentence_id 정합성이 좋아짐
+  onStatus,
 }) {
   const sentenceCount = sentenceMap ? sentenceMap.length : countSentencesRough(passage);
   const blankCount = sentenceCount * MIN_BLANKS_PER_SENTENCE;
@@ -194,7 +228,7 @@ export async function generateStep2({
 ${passage}
 `.trim();
 
-  return callGemini({ apiKey, model, prompt, schema: STEP2_SCHEMA });
+  return callGemini({ apiKey, model, prompt, schema: STEP2_SCHEMA, onStatus });
 }
 
 // ---------------------------------------------------------
@@ -264,7 +298,7 @@ function splitParagraphs(passage) {
   return merged;
 }
 
-export async function generateStep3({ passage, apiKey, model = DEFAULT_MODEL }) {
+export async function generateStep3({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
   const paragraphs = splitParagraphs(passage);
 
   const results = await Promise.all(
@@ -286,6 +320,7 @@ ${paragraphText}
         apiKey,
         model,
         prompt,
+        onStatus,
         schema: {
           type: "OBJECT",
           properties: {
@@ -333,7 +368,7 @@ const STEP4_SCHEMA = {
   propertyOrdering: ["unscramble"],
 };
 
-export async function generateStep4({ passage, apiKey, model = DEFAULT_MODEL }) {
+export async function generateStep4({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
   const prompt = `
 다음 영어 지문의 모든 문장에 대해 언스크램블(어순 배열) 문제를 만드세요.
 
@@ -349,7 +384,7 @@ export async function generateStep4({ passage, apiKey, model = DEFAULT_MODEL }) 
 ${passage}
 `.trim();
 
-  return callGemini({ apiKey, model, prompt, schema: STEP4_SCHEMA });
+  return callGemini({ apiKey, model, prompt, schema: STEP4_SCHEMA, onStatus });
 }
 
 // ---------------------------------------------------------
@@ -357,9 +392,10 @@ ${passage}
 // ---------------------------------------------------------
 export async function generateWorkbook({ passage, apiKey, model = DEFAULT_MODEL, onProgress }) {
   const report = (step) => onProgress && onProgress(step);
+  const statusFor = (step) => (message) => report({ step, status: "retry", message });
 
   report({ step: 1, status: "start" });
-  const step1 = await generateStep1({ passage, apiKey, model });
+  const step1 = await generateStep1({ passage, apiKey, model, onStatus: statusFor(1) });
   report({ step: 1, status: "done" });
 
   report({ step: 2, status: "start" });
@@ -368,15 +404,16 @@ export async function generateWorkbook({ passage, apiKey, model = DEFAULT_MODEL,
     apiKey,
     model,
     sentenceMap: step1.sentences,
+    onStatus: statusFor(2),
   });
   report({ step: 2, status: "done" });
 
   report({ step: 3, status: "start" });
-  const step3 = await generateStep3({ passage, apiKey, model });
+  const step3 = await generateStep3({ passage, apiKey, model, onStatus: statusFor(3) });
   report({ step: 3, status: "done" });
 
   report({ step: 4, status: "start" });
-  const step4 = await generateStep4({ passage, apiKey, model });
+  const step4 = await generateStep4({ passage, apiKey, model, onStatus: statusFor(4) });
   report({ step: 4, status: "done" });
 
   return {
