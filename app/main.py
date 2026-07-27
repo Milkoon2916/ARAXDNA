@@ -18,16 +18,13 @@ app = FastAPI(title="영어 학습자료 제작소")
 ROOT_DIR = Path(__file__).parent.parent
 STATIC_DIR = ROOT_DIR / "static"                 # 구문분석기 프론트엔드 (단독)
 COMPREHENSION_DIR = ROOT_DIR / "comprehension"    # OX 워크북 메이커 (단독, 정적)
-COMBINED_DIR = ROOT_DIR / "combined"              # 지문 1번으로 구문분석+OX 동시 생성
-ALL_IN_ONE_DIR = ROOT_DIR / "all-in-one"           # 지문 1번으로 4개 도구(구문분석+OX+워크북+VOCA) 동시 생성
+ALL_IN_ONE_DIR = ROOT_DIR / "all-in-one"           # 지문 1번으로 워크북+VOCA 동시 생성
 LANDING_DIR = ROOT_DIR / "landing"                # 허브 랜딩 페이지
 
 if STATIC_DIR.exists():
     app.mount("/passage-analyzer", StaticFiles(directory=str(STATIC_DIR), html=True), name="passage-analyzer")
 if COMPREHENSION_DIR.exists():
     app.mount("/comprehension", StaticFiles(directory=str(COMPREHENSION_DIR), html=True), name="comprehension")
-if COMBINED_DIR.exists():
-    app.mount("/combined", StaticFiles(directory=str(COMBINED_DIR), html=True), name="combined")
 if ALL_IN_ONE_DIR.exists():
     app.mount("/all-in-one", StaticFiles(directory=str(ALL_IN_ONE_DIR), html=True), name="all-in-one")
 
