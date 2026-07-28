@@ -13,14 +13,8 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.shared import Inches, Pt
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = BASE_DIR / "app" / "templates"
@@ -28,14 +22,9 @@ STATIC_DIR = BASE_DIR / "static"
 OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# 한글 PDF 폰트 등록 (reportlab 기본 폰트는 한글을 지원하지 않아 깨져서 나온다)
-# ---------------------------------------------------------------------------
-FONT_REGULAR = "NotoSansKR"
-FONT_BOLD = "NotoSansKR-Bold"
-pdfmetrics.registerFont(TTFont(FONT_REGULAR, str(STATIC_DIR / "fonts" / "NotoSansKR-Regular.ttf")))
-pdfmetrics.registerFont(TTFont(FONT_BOLD, str(STATIC_DIR / "fonts" / "NotoSansKR-Bold.ttf")))
-pdfmetrics.registerFontFamily(FONT_REGULAR, normal=FONT_REGULAR, bold=FONT_BOLD, italic=FONT_REGULAR, boldItalic=FONT_BOLD)
+# PDF는 화면(result.html/worksheet.html)과 동일한 핑크 브랜드 스타일의 HTML을
+# WeasyPrint로 그대로 인쇄하는 방식이다 (한글 폰트는 Dockerfile의 fonts-noto-cjk로 해결).
+_pdf_env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
 
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
@@ -297,95 +286,26 @@ def create_worksheet_docx(data: dict, worksheet: dict, output_path: Path, answer
     doc.save(output_path)
 
 
-def pdf_styles():
-    styles = getSampleStyleSheet()
-    styles["Heading2"].fontName = FONT_REGULAR
-    styles.add(ParagraphStyle(
-        name="ARATitle", parent=styles["Title"], alignment=TA_CENTER,
-        fontName=FONT_REGULAR, fontSize=20, leading=24, spaceAfter=8
-    ))
-    styles.add(ParagraphStyle(
-        name="ARABody", parent=styles["BodyText"], fontName=FONT_REGULAR,
-        fontSize=10, leading=15, spaceAfter=4
-    ))
-    styles.add(ParagraphStyle(
-        name="ARAQuestion", parent=styles["BodyText"], fontName=FONT_REGULAR,
-        fontSize=11.5, leading=18, spaceAfter=10
-    ))
-    return styles
-
-
 def create_vocabulary_pdf(data: dict, output_path: Path):
-    styles = pdf_styles()
-    doc = SimpleDocTemplate(
-        str(output_path), pagesize=A4,
-        rightMargin=15 * mm, leftMargin=15 * mm,
-        topMargin=13 * mm, bottomMargin=13 * mm
+    """화면에 보이는 word-card와 동일한 핑크 브랜드 스타일로 PDF를 렌더링한다."""
+    template = _pdf_env.get_template("vocabulary_pdf.html.j2")
+    html_str = template.render(
+        title=data.get("title", ""),
+        level=data.get("level", ""),
+        vocabulary=data.get("vocabulary", []),
     )
-    story = [
-        Paragraph("ARA VOCABULARY", styles["ARATitle"]),
-        Paragraph(f"{data.get('title', '')} · {data.get('level', '')}", styles["ARABody"]),
-        Spacer(1, 8)
-    ]
-
-    for i, item in enumerate(data.get("vocabulary", []), 1):
-        story.append(Paragraph(f"<b>{i}. {item.get('word', '')}</b>", styles["Heading2"]))
-        rows = [
-            ["품사", item.get("part_of_speech", "")],
-            ["뜻", item.get("meaning", "")],
-            ["유의어", ", ".join(item.get("synonyms", []))],
-            ["반의어", ", ".join(item.get("antonyms", []))],
-            ["지문 속 예문", item.get("context_sentence", "")],
-            ["문맥상 의미", item.get("context_meaning", "")],
-            ["파생어", ", ".join(item.get("derivatives", []))],
-            ["연어/표현", ", ".join(item.get("collocations", []))]
-        ]
-        table = Table(rows, colWidths=[30 * mm, 145 * mm])
-        table.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D0D5DD")),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F2F4F7")),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.extend([table, Spacer(1, 8)])
-
-    doc.build(story)
+    HTML(string=html_str).write_pdf(str(output_path))
 
 
 def create_worksheet_pdf(data: dict, worksheet: dict, output_path: Path, answer_key=False):
-    styles = pdf_styles()
-    doc = SimpleDocTemplate(
-        str(output_path), pagesize=A4,
-        rightMargin=18 * mm, leftMargin=18 * mm,
-        topMargin=15 * mm, bottomMargin=15 * mm
+    """화면 단어시험지와 동일한 스타일로 PDF를 렌더링한다. answer_key=True면 정답지 스타일."""
+    template = _pdf_env.get_template("worksheet_pdf.html.j2")
+    html_str = template.render(
+        title=worksheet.get("title", data.get("title", "")),
+        questions=worksheet.get("questions", []),
+        answer_key=answer_key,
     )
-    story = [
-        Paragraph("ARA VOCABULARY TEST", styles["ARATitle"]),
-        Paragraph(data.get("title", ""), styles["ARABody"]),
-        Spacer(1, 8),
-        Paragraph("Name: ______________________________    Date: ________________", styles["ARABody"]),
-        Spacer(1, 12)
-    ]
-
-    for q in worksheet.get("questions", []):
-        if answer_key:
-            text = f"<b>{q.get('number')}.</b> {q.get('question', '')} → <b>{q.get('answer', '')}</b>"
-        else:
-            text = f"<b>{q.get('number')}.</b> {q.get('question', '')}"
-            choices = q.get("choices", [])
-            if choices:
-                text += "<br/>" + " &nbsp;&nbsp; ".join(
-                    f"{chr(65+i)}. {c}" for i, c in enumerate(choices)
-                )
-        story.append(Paragraph(text, styles["ARAQuestion"]))
-        story.append(Spacer(1, 5))
-
-    doc.build(story)
+    HTML(string=html_str).write_pdf(str(output_path))
 
 
 # ---------------------------------------------------------------------------
