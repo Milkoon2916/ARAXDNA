@@ -5,20 +5,34 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
 
-app = FastAPI()
+app = FastAPI(title="Workbook Service")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+def find_path(rel_path: str) -> Optional[str]:
+    cur_dir = os.path.dirname(os.path.abspath(__file__))
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cur_dir, rel_path),
+        os.path.join(cur_dir, "..", rel_path),
+        os.path.join(cur_dir, "..", "..", rel_path),
+        os.path.join(cwd, rel_path),
+        os.path.join(cwd, "web-merged", rel_path),
+    ]
+    for path in candidates:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            return abs_path
+    return None
 
-if os.path.exists(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+wb_static_path = find_path("workbook_service/static") or find_path("static")
+if wb_static_path:
+    app.mount("/static", StaticFiles(directory=wb_static_path), name="static")
 
 @app.get("/")
 async def read_root():
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(index_path):
+    index_path = find_path("workbook_service/static/index.html") or find_path("static/index.html")
+    if index_path:
         return FileResponse(index_path)
-    return {"status": "workbook_service_active"}
+    return {"status": "ok", "message": "Workbook Service Running"}
 
 class SentenceData(BaseModel):
     id: int
