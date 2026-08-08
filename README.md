@@ -1,69 +1,60 @@
-# 영어 학습자료 제작소 (완전 통합판)
+# 영어 학습자료 제작소 (통합판)
 
-`WEB`(구문분석+OX), `WB`(단어시험지 워크북), `VOCA`(어휘 분석)를 **하나의 FastAPI 서버, 하나의 배포**로 합쳤습니다.
-Render 하나에 올리면 도메인 하나에서 4개 도구가 전부 동작합니다.
+지문분석기 / 워크북 메이커 / O/X 리딩 워크북 / 단어장 퀴즈를 하나의 FastAPI 서버로 합친 버전입니다.
 
-## 주소 구조
+## 폴더 구조
 
-| 경로 | 도구 |
-|---|---|
-| `/` | 허브 랜딩 페이지 (all-in-one으로 바로 연결) |
-| `/all-in-one/` | 지문 1번으로 4개 도구(구문분석+OX+워크북+VOCA) 전부 동시 생성, 원하는 도구만 체크 가능 |
-| `/workbook/api/render-pdf`, `/voca/analyze` 등 | `all-in-one`이 내부적으로 호출하는 백엔드 API (직접 방문용 화면 아님) |
+```
+app/
+  main.py              앱 진입점, 모든 라우터 연결
+  models.py            DB 테이블 정의 (teachers, word_lists, words, students,
+                        quiz_results, passages, materials)
+  db.py                DB 조회/저장 로직 (정원 제한 체크 포함)
+  limits.py            용량 제한값 (단어장 100개, 단어 5000개, 학생 100명)
+  auth.py              PIN 해시, JWT, Gemini 키 암호화
+  routes_auth.py        회원가입/로그인/로그아웃/내정보
+  routes_words.py       단어장·단어·학생 관리, 결과 보기 (로그인 필요)
+  routes_public.py      학생용 (링크+코드, 로그인 불필요)
+  routes_generate.py    지문분석/워크북/OX 생성 (로그인 필요, 선생님 개인 Gemini 키 사용)
+  prompts.py            3개 도구의 Gemini 시스템 프롬프트
+  analysis_schema.py    지문분석 결과의 JSON 스키마 (기존 프로젝트에서 이식)
+  llm.py                Gemini API 실제 호출
+```
 
-> `/passage-analyzer/`, `/comprehension/`, `/combined/` 단독 화면은 `all-in-one`에서 도구별 체크박스로
-> 전부 대체되어 제거했습니다. `/workbook/`, `/voca/` 앱 자체는 각 도구의 PDF 렌더링 API를 제공하므로
-> 서버에는 그대로 남아 있지만, 랜딩 페이지에서는 더 이상 링크하지 않습니다.
+## 실행 전 환경변수
 
-## 어떻게 합쳤나
-
-- `app/` (구문분석) 은 기존 WEB 그대로. 최상위 FastAPI 앱이자 허브 역할.
-- `workbook_service/` = 기존 WB `app/` 폴더를 그대로 옮긴 것. FastAPI 앱 전체를
-  `app.mount("/workbook", workbook_app)`로 서브 마운트했습니다.
-- `voca_service/` = 기존 VOCA `app/` + `static/` 폴더를 그대로 옮긴 것. 마찬가지로
-  `app.mount("/voca", voca_app)`.
-- **서버 쪽 파이썬 코드는 로직을 하나도 바꾸지 않았습니다.** Starlette의 `Mount`가
-  하위 앱의 내부 라우팅을 그대로 처리해주기 때문입니다.
-- **프론트엔드(HTML/JS)에서 `/api/render-pdf`, `/static/...`, `action="/analyze"`
-  처럼 절대경로(`/`로 시작)로 자기 자신을 호출하던 부분만 상대경로로 고쳤습니다.**
-  서브 경로(`/workbook/`, `/voca/`)에 마운트되면 절대경로는 무조건 도메인 루트를
-  가리켜서 깨지기 때문에 필요한 수정이었습니다. (예: `fetch("/api/render-pdf")` →
-  `fetch("api/render-pdf")`)
+```
+JWT_SECRET=<openssl rand -hex 32 로 생성한 랜덤 값>
+FERNET_KEY=<python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
+```
+두 값 다 한 번 정하면 이후 계속 같은 값을 써야 해요. 바뀌면 기존 로그인 세션과
+저장된 Gemini 키가 전부 무효가 됩니다.
 
 ## 로컬 실행
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
 pip install -r requirements.txt
-
+export JWT_SECRET=...
+export FERNET_KEY=...
 uvicorn app.main:app --reload --port 8000
 ```
 
-브라우저에서 `http://localhost:8000` → 허브 랜딩 페이지에서 4개 도구 중 선택.
+## 인증 흐름
 
-## 배포 (Render 기준)
+1. `POST /auth/signup` — 이름 + PIN + Gemini API 키로 선생님 계정 생성
+2. `POST /auth/login` — 이름 + PIN으로 로그인, 세션 쿠키 발급 (httpOnly, secure, 30일)
+3. 이후 `/api/*` 요청은 이 쿠키로 자동 인증됨 (로그인한 선생님 소속 데이터만 조회/수정)
+4. 학생은 `/public/quiz/{access_code}/...` 경로로 로그인 없이 접속 (기존 방식 그대로)
 
-1. 이 폴더 전체 내용으로 GitHub `WEB` 레포를 교체(또는 새 레포 생성)합니다.
-2. Render 대시보드 → **New → Web Service** → 해당 레포 연결.
-3. Runtime이 **Docker**로 자동 감지되는지 확인 (Dockerfile이 WeasyPrint 시스템
-   의존성 + 한글 폰트까지 설치합니다).
-4. 별도 환경변수 필요 없음. 4개 도구 모두 사용자가 자신의 API 키를 브라우저에서
-   직접 입력하는 BYOK 구조라서, 서버에는 어떤 비밀 키도 두지 않습니다.
-5. 배포 완료되면 `https://xxx.onrender.com` 하나의 주소에서 4개 도구가 모두 동작합니다.
+## 아직 안 된 것 (다음에 이어서 할 것들)
 
-## 확인 완료 (로컬 스모크 테스트)
-
-- `GET /` → 200 (all-in-one으로 안내)
-- `GET /all-in-one/` → 200
-- `POST /workbook/api/render-pdf` → 200 (all-in-one이 내부적으로 호출)
-- `POST /voca/analyze` → 200 (all-in-one이 내부적으로 호출)
-
-## 남은 선택 사항 (원하시면 다음 단계로 진행)
-
-지금은 4개 도구가 **한 주소에서** 다 동작하지만, 각각 별도 폼입니다.
-"지문 5개를 한 번에 넣으면 구문분석+OX+워크북+VOCA가 전부 자동 생성"되는 진짜
-원클릭 버전을 원하시면, 4개 도구가 각각 브라우저에서 Gemini/OpenAI를 호출하는
-프론트엔드 JS 로직(`workbook-generator.js`, VOCA의 분석 프롬프트 등)을 하나의
-공통 입력 폼에서 순서대로 호출하도록 새 오케스트레이션 페이지를 만들어야 합니다.
-필요하시면 이어서 만들어 드릴게요.
+- **프론트엔드**: 지금은 API(백엔드)만 완성된 상태예요. 기존 React(단어장)/정적 HTML(워크북·OX·지문분석) 화면을
+  이 API에 맞게 새로 연결하는 작업이 필요해요.
+- **PDF 렌더링**: 기존 워크북 사이트의 WeasyPrint 렌더링(`render.py`)을 아직 이 통합판에 옮기지 않았어요.
+  지문분석/워크북 결과를 PDF로 만드는 부분은 기존 `render.py`를 그대로 가져와 붙이면 됩니다.
+- **워크북/OX 프롬프트 검수**: `prompts.py`의 워크북·OX 시스템 프롬프트는 지금까지 대화에서 정리된
+  스펙을 바탕으로 새로 작성한 것이라, 기존에 실제 쓰던 프롬프트와 결과물이 다를 수 있어요.
+  한 번 실제로 돌려보고 결과 품질을 확인해야 해요.
+- **Gemini 실제 호출 테스트**: 개발 환경 네트워크 제약으로 이번엔 API 형식만 맞춰뒀고 실제 호출은
+  못 해봤어요. 배포 후 첫 호출에서 정상 동작하는지 확인 필요.
+- **Render 배포 설정** (Dockerfile, render.yaml): 아직 안 만들었어요.
