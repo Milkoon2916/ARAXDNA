@@ -7,23 +7,19 @@ from typing import List, Optional
 
 app = FastAPI()
 
-# 정적 파일(JS, CSS 등) 폴더 경로 설정
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-# /static 경로로 CSS 및 JS 파일 연결
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# 1. 사이트 접속 시(GET /) 메인 index.html 페이지 보여주기
 @app.get("/")
 async def read_root():
     index_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return {"message": "Workbook Service is Running"}
+    return {"status": "workbook_service_active"}
 
-# 2. 워크북 데이터 생성 API 엔드포인트
 class SentenceData(BaseModel):
     id: int
     en: str
