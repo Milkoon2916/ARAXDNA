@@ -1,37 +1,75 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from typing import List, Optional
 
-app = FastAPI(title="All-in-One Educational Service")
+app = FastAPI(title="App Main Service")
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def find_path(rel_path: str) -> Optional[str]:
+    cur_dir = os.path.dirname(os.path.abspath(__file__))
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cur_dir, rel_path),
+        os.path.join(cur_dir, "..", rel_path),
+        os.path.join(cur_dir, "..", "..", rel_path),
+        os.path.join(cwd, rel_path),
+        os.path.join(cwd, "web-merged", rel_path),
+    ]
+    for path in candidates:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            return abs_path
+    return None
 
-# static 경로 마운트 검증
-workbook_static = os.path.join(BASE_DIR, "workbook_service", "static")
-voca_static = os.path.join(BASE_DIR, "voca_service", "static")
-all_in_one_dir = os.path.join(BASE_DIR, "all-in-one")
+wb_static_path = find_path("workbook_service/static")
+if wb_static_path:
+    app.mount("/static", StaticFiles(directory=wb_static_path), name="static")
+    app.mount("/workbook/static", StaticFiles(directory=wb_static_path), name="workbook_static")
 
-if os.path.exists(workbook_static):
-    app.mount("/workbook/static", StaticFiles(directory=workbook_static), name="workbook_static")
-
-if os.path.exists(voca_static):
-    app.mount("/static", StaticFiles(directory=voca_static), name="voca_static")
-
-if os.path.exists(all_in_one_dir):
-    app.mount("/all-in-one", StaticFiles(directory=all_in_one_dir), name="all_in_one")
-
-# 루트 (/) 경로 진입 시 워크북/통합 메인 페이지 연결
 @app.get("/")
 async def read_root():
-    # 1순위: workbook_service/static/index.html
-    wb_index = os.path.join(workbook_static, "index.html")
-    if os.path.exists(wb_index):
-        return FileResponse(wb_index)
-    
-    # 2순위: all-in-one/index.html
-    aio_index = os.path.join(all_in_one_dir, "index.html")
-    if os.path.exists(aio_index):
-        return FileResponse(aio_index)
+    index_path = find_path("workbook_service/static/index.html")
+    if index_path:
+        return FileResponse(index_path)
+    return {"status": "ok", "message": "App Main Running"}
 
-    return {"status": "online", "message": "Service is running properly."}
+class SentenceData(BaseModel):
+    id: int
+    en: str
+    ko: str
+    verb_practice: str
+    grammar_choice: str
+    ko_blank: str
+    en_blank: str
+    scramble: str
+    keywords: List[str]
+    check_item: Optional[str] = None
+
+class ParagraphData(BaseModel):
+    text: str
+    answers: List[str]
+
+class WorkbookGenerateRequest(BaseModel):
+    title: str
+    publisher_info: Optional[str] = "2022 개정 | NE능률(오선영) 공통영어2"
+    lesson: Optional[str] = "Lesson 1"
+    sentences: List[SentenceData]
+    paragraphs: Optional[List[ParagraphData]] = []
+
+@app.post("/api/workbook/generate")
+async def generate_workbook(request: WorkbookGenerateRequest):
+    try:
+        return {
+            "status": "success",
+            "metadata": {
+                "title": request.title,
+                "publisher": request.publisher_info,
+                "lesson": request.lesson
+            },
+            "sentences": [s.dict() for s in request.sentences],
+            "paragraphs": [p.dict() for p in request.paragraphs]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
