@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from html import escape as html_escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -206,6 +207,98 @@ Vocabulary:
     return clean_json(raw)
 
 
+def generate_grammar_set(passage: str, target_grammar: str, level: str, set_number: int,
+                          count: int, provider: str, api_key: str, model: str) -> dict:
+    level_desc = "한국 중학교 수준 (중학 어법)" if level.startswith("중") else "한국 고등학교 수준 (고등/수능 어법)"
+    prompt = f"""
+You are an expert Korean EFL 어법(grammar) exam writer for {level_desc} students, in the style of
+premium Korean grammar workbook publishers (e.g. category-tagged item banks like "중등발전" series).
+
+Create SET {set_number} of a grammar practice test focused specifically on this target grammar point:
+"{target_grammar}"
+
+Number of questions in this set: exactly {count}. Every question must be different (no repeats or
+near-duplicate sentences/patterns).
+
+Break "{target_grammar}" down into varied sub-aspects and tag EACH question with the specific sub-point
+it tests (field "tag"), e.g. if the target grammar is 관계대명사, sub-tags could include 주격 관계대명사,
+목적격 관계대명사, 소유격 관계대명사, 관계대명사 what, 계속적 용법, 전치사+관계대명사, 관계부사와의 구별,
+복합관계대명사, etc. Use as many different sub-tags across the set as make sense — do not reuse the same
+narrow sub-tag more than 3-4 times in one set of {count}. If the target grammar is broader (e.g. "시제"),
+invent similarly natural sub-aspects (예: 현재완료 vs 과거, 완료진행형, 시제 일치, 미래완료 등).
+
+You may use the passage below as topical inspiration for some sentences, but you do not need to copy
+its exact sentences — write original sentences whenever needed, as long as they clearly test the
+target grammar point at a level appropriate for {level_desc} students.
+
+Mix question TYPES naturally across the set — both "mc" (multiple choice) and "short" (서술형, no
+choices, student writes the answer):
+- mc, 괄호 안에서 알맞은 것 고르기: prompt has "(A / B)" inline, choices = ["A","B"] (2 choices).
+- mc, 빈칸에 들어갈 가장 적절한 것/형태 고르기: prompt has a blank (write it as a long underscore run
+  like "______"), choices = 4 options.
+- mc, 두 빈칸에 들어갈 말로 가장 알맞은 것 고르기: prompt has two blanks, choices = 4 items each written
+  as "first / second".
+- mc, 어법상 옳은/틀린 문장 고르기: choices = 4 full candidate sentences.
+- mc, 어법상 틀린 부분 고르기: prompt contains inline ① ~ ⑤ markers before 4-5 segments of one sentence,
+  choices = the 4-5 underlined segment texts themselves (student picks which is wrong).
+- short, 우리말과 같은 뜻이 되도록 주어진 단어를 올바른 순서로 배열하시오: prompt = the Korean sentence,
+  prompt_secondary = the scrambled English words/phrases separated by " / ", choices = [] (empty),
+  answer = the correctly ordered English sentence.
+- short, 문장을 지시대로 바꿔쓰기 (예: 복합관계대명사를 이용해서 다시 쓰기, 수동태로 바꿔쓰기, 4형식으로
+  바꿔쓰기 등): prompt = the original sentence + instruction context, choices = [], answer = the
+  rewritten sentence.
+
+Roughly 55-70% of the set should be "mc" and the rest "short", distributed naturally (do not group all
+short-answer items together — interleave them).
+
+Rules:
+- Exactly one unambiguously correct answer per question (for "short" type, one clearly correct/expected
+  answer, minor acceptable wording variants are fine but keep "answer" to the single best form).
+- Provide a concise, classroom-friendly Korean explanation (해설) for every question, mc or short.
+- Do not reveal the answer inside "instruction" or "prompt".
+- Number questions 1 to {count} continuously.
+- "prompt_secondary" is optional — only include it (non-empty) for word-ordering questions that need a
+  separate scrambled word-bank box; otherwise omit it or set it to "".
+
+Return ONLY valid JSON in exactly this structure:
+{{
+  "set_number": {set_number},
+  "questions": [
+    {{
+      "number": 1,
+      "tag": "short specific sub-grammar label in Korean, e.g. 주격 관계대명사",
+      "type": "mc",
+      "instruction": "괄호 안에서 알맞은 것을 고르시오.",
+      "prompt": "the sentence/passage text for the question, with inline blanks/markers as needed",
+      "prompt_secondary": "",
+      "choices": ["choice1", "choice2"],
+      "answer": "the correct choice or written answer, copied exactly if it's from choices",
+      "explanation": "concise Korean explanation of why this is correct (and briefly why others are wrong, for mc)"
+    }}
+  ]
+}}
+
+Passage (topical context only, optional to use):
+{passage[:4000]}
+"""
+    raw = call_llm(provider, api_key, model, "Return valid JSON only. Do not add markdown.", prompt)
+    return clean_json(raw)
+
+def generate_grammar_sets(passage: str, target_grammar: str, level: str, sets: int, count: int,
+                           provider: str, api_key: str, model: str, title: str = "") -> dict:
+    result_sets = []
+    for i in range(1, sets + 1):
+        result_sets.append(
+            generate_grammar_set(passage, target_grammar, level, i, count, provider, api_key, model)
+        )
+    return {
+        "title": title or "Grammar Practice",
+        "target_grammar": target_grammar,
+        "level": level,
+        "sets": result_sets,
+    }
+
+
 # ---------------------------------------------------------------------------
 # DOCX / PDF 생성 (기존 로직과 동일, 입력 데이터에만 의존)
 # ---------------------------------------------------------------------------
@@ -308,12 +401,76 @@ def create_worksheet_pdf(data: dict, worksheet: dict, output_path: Path, answer_
     HTML(string=html_str).write_pdf(str(output_path))
 
 
+def create_grammar_docx(grammar_data: dict, output_path: Path, answer_key=False):
+    doc = Document()
+    subtitle = f"목표 문법: {grammar_data.get('target_grammar', '')} · {grammar_data.get('level', '')}"
+    add_docx_header(doc, "ARA GRAMMAR PRACTICE" + (" · 정답지" if answer_key else ""), subtitle)
+
+    for s in grammar_data.get("sets", []):
+        doc.add_paragraph("")
+        h = doc.add_paragraph()
+        h.add_run(f"SET {s.get('set_number')}").bold = True
+        if not answer_key:
+            p2 = doc.add_paragraph("Name: ______________________________    Date: ________________")
+            p2.paragraph_format.space_after = Pt(10)
+
+        for q in s.get("questions", []):
+            tag = q.get("tag", "")
+            if tag:
+                pt = doc.add_paragraph()
+                pt.add_run(f"[{tag}]").italic = True
+
+            p = doc.add_paragraph()
+            p.add_run(f"{q.get('number')}. ").bold = True
+            p.add_run(q.get("instruction", q.get("question", "")))
+
+            prompt = q.get("prompt", "")
+            if prompt:
+                doc.add_paragraph(f"    {prompt}")
+            secondary = q.get("prompt_secondary", "")
+            if secondary:
+                doc.add_paragraph(f"    {secondary}")
+
+            if answer_key:
+                p2 = doc.add_paragraph(f"    → 정답: {q.get('answer', '')}")
+                p2.add_run(f"\n    해설: {q.get('explanation', '')}")
+            elif q.get("type") == "short":
+                doc.add_paragraph("    답: ______________________________________________")
+            else:
+                choices = q.get("choices", [])
+                if choices:
+                    marks = ["①", "②", "③", "④", "⑤", "⑥"]
+                    doc.add_paragraph("    " + "    ".join(
+                        f"{marks[i] if i < len(marks) else i+1} {c}" for i, c in enumerate(choices)
+                    ))
+            doc.add_paragraph("")
+
+    doc.save(output_path)
+
+
+def create_grammar_pdf(grammar_data: dict, output_path: Path, answer_key=False):
+    """세트별로 새 페이지에서 시작하는 어법 문제/정답지 PDF. 화면과 동일한 스타일을 그대로 인쇄한다."""
+    template = _pdf_env.get_template("grammar_pdf.html.j2")
+    html_str = template.render(
+        title=grammar_data.get("title", ""),
+        target_grammar=grammar_data.get("target_grammar", ""),
+        level=grammar_data.get("level", ""),
+        sets=grammar_data.get("sets", []),
+        answer_key=answer_key,
+    )
+    HTML(string=html_str).write_pdf(str(output_path))
+
+
 # ---------------------------------------------------------------------------
 # 라우트
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def home():
     return (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
+
+
+GRAMMAR_SETS = 3
+GRAMMAR_QUESTIONS_PER_SET = 30
 
 
 @app.post("/analyze", response_class=HTMLResponse)
@@ -325,10 +482,13 @@ def analyze(
     level: str = Form("고등학교 1학년"),
     count: int = Form(10),
     focus: str = Form("지문 이해와 시험 대비"),
+    target_grammar: str = Form(""),
+    grammar_level: str = Form("고등"),
 ):
     if not passage.strip():
         raise HTTPException(status_code=400, detail="분석할 지문을 입력해주세요.")
     data = analyze_passage(passage, level, count, focus, provider, api_key, model)
+    data["passage"] = passage
     html = (TEMPLATE_DIR / "result.html").read_text(encoding="utf-8")
 
     cards = []
@@ -354,6 +514,26 @@ def analyze(
         </article>
         """)
 
+    grammar_section = ""
+    target_grammar = target_grammar.strip()
+    if target_grammar:
+        try:
+            grammar_data = generate_grammar_sets(
+                passage, target_grammar, grammar_level, GRAMMAR_SETS, GRAMMAR_QUESTIONS_PER_SET,
+                provider, api_key, model, title=data.get("title", ""),
+            )
+            grammar_section = render_grammar_section(grammar_data, target_grammar, grammar_level)
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, str) else "어법 문제 생성에 실패했습니다."
+            grammar_section = f"""
+  <header class="page-header" style="margin-top:48px;">
+    <div class="eyebrow">Grammar Practice</div>
+    <h1 style="font-size:26px;">목표 문법 어법 문제</h1>
+    <p class="err" style="display:block;">어법 문제 생성에 실패했어요: {html_escape(detail)}<br>
+      단어 분석 결과는 정상적으로 저장되었으니, 아래에서 다시 시도하려면 처음으로 돌아가 지문 분석을 다시 진행해주세요.</p>
+  </header>
+"""
+
     payload = json.dumps(data, ensure_ascii=False)
     html = html.replace("{{TITLE}}", data.get("title", "Vocabulary"))
     html = html.replace("{{LEVEL}}", data.get("level", ""))
@@ -362,7 +542,95 @@ def analyze(
     html = html.replace("{{PROVIDER}}", provider)
     html = html.replace("{{API_KEY}}", api_key)
     html = html.replace("{{MODEL}}", model)
+    html = html.replace("{{GRAMMAR_SECTION}}", grammar_section)
     return html
+
+
+def _gm_question_html(q: dict) -> str:
+    marks = ["①", "②", "③", "④", "⑤", "⑥"]
+    qtype = q.get("type", "mc")
+    tag = q.get("tag", "")
+    instruction = q.get("instruction", "")
+    number = q.get("number", "")
+
+    prompt_html = f"<div class='gm-prompt'>{q.get('prompt', '')}</div>" if q.get("prompt") else ""
+    secondary = q.get("prompt_secondary", "")
+    if secondary:
+        prompt_html += f"<div class='gm-prompt gm-plain'>{secondary}</div>"
+
+    body_html = ""
+    if qtype == "short":
+        body_html = "<div class='gm-writeline'></div>"
+    else:
+        choices = q.get("choices", [])
+        if choices:
+            choice_items = "".join(
+                f"<span><span class='gm-num'>{marks[i] if i < len(marks) else i+1}</span>{c}</span>"
+                for i, c in enumerate(choices)
+            )
+            grid_class = "gm-grid2" if len(choices) > 2 else ""
+            body_html = f"<div class='gm-choices {grid_class}'>{choice_items}</div>"
+
+    tag_html = f"<span class='gm-tag'>{tag}</span>" if tag else ""
+
+    return f"""
+    <div class="gm-qbox">
+      {tag_html}
+      <p class="gm-instruction"><b>{number}</b> {instruction}</p>
+      {prompt_html}
+      {body_html}
+    </div>
+    """
+
+
+def render_grammar_section(grammar_data: dict, target_grammar: str, grammar_level: str) -> str:
+    sets_html = []
+    for s in grammar_data.get("sets", []):
+        qs = [_gm_question_html(q) for q in s.get("questions", [])]
+        n_q = len(s.get("questions", []))
+        sets_html.append(f"""
+        <div class="gm-set-title">SET {s.get('set_number')} ({n_q}문항)</div>
+        <div class="gm-cols">
+          {''.join(qs)}
+        </div>
+        """)
+
+    grammar_json = html_escape(json.dumps(grammar_data, ensure_ascii=False), quote=True)
+
+    return f"""
+  <header class="page-header" style="margin-top:48px;">
+    <div class="eyebrow">Grammar Practice</div>
+    <h1 style="font-size:26px;">목표 문법 어법 문제 · {target_grammar}</h1>
+    <p>{grammar_level} 수준으로 3세트, 세트당 30문항 이상(객관식+서술형 혼합)을 만들었어요. 문제지와 정답지를 각각 DOCX/PDF로 받을 수 있어요.</p>
+  </header>
+
+  <div class="toolbar">
+    <form action="download/grammar/docx" method="post">
+      <input type="hidden" name="data" value="{grammar_json}">
+      <input type="hidden" name="answer_key" value="false">
+      <button class="secondary" type="submit">📄 어법 문제 DOCX</button>
+    </form>
+    <form action="download/grammar/pdf" method="post">
+      <input type="hidden" name="data" value="{grammar_json}">
+      <input type="hidden" name="answer_key" value="false">
+      <button class="secondary" type="submit">📕 어법 문제 PDF</button>
+    </form>
+    <form action="download/grammar/docx" method="post">
+      <input type="hidden" name="data" value="{grammar_json}">
+      <input type="hidden" name="answer_key" value="true">
+      <button class="primary" type="submit">✅ 정답지 DOCX</button>
+    </form>
+    <form action="download/grammar/pdf" method="post">
+      <input type="hidden" name="data" value="{grammar_json}">
+      <input type="hidden" name="answer_key" value="true">
+      <button class="primary" type="submit">✅ 정답지 PDF</button>
+    </form>
+  </div>
+
+  <main>
+    {''.join(sets_html)}
+  </main>
+"""
 
 
 @app.post("/generate-worksheet", response_class=HTMLResponse)
@@ -436,4 +704,23 @@ def download_worksheet_pdf(data: str = Form(...), worksheet: str = Form(...), an
     path = OUTPUT_DIR / f"ara_worksheet_{uuid.uuid4().hex}.pdf"
     create_worksheet_pdf(parsed, worksheet_data, path, answer_key)
     filename = "ara_worksheet_answer_key.pdf" if answer_key else "ara_worksheet.pdf"
+    return FileResponse(path, filename=filename, media_type="application/pdf")
+
+
+@app.post("/download/grammar/docx")
+def download_grammar_docx(data: str = Form(...), answer_key: bool = Form(False)):
+    grammar_data = json.loads(data)
+    path = OUTPUT_DIR / f"ara_grammar_{uuid.uuid4().hex}.docx"
+    create_grammar_docx(grammar_data, path, answer_key)
+    filename = "ara_grammar_answer_key.docx" if answer_key else "ara_grammar.docx"
+    return FileResponse(path, filename=filename,
+                         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+@app.post("/download/grammar/pdf")
+def download_grammar_pdf(data: str = Form(...), answer_key: bool = Form(False)):
+    grammar_data = json.loads(data)
+    path = OUTPUT_DIR / f"ara_grammar_{uuid.uuid4().hex}.pdf"
+    create_grammar_pdf(grammar_data, path, answer_key)
+    filename = "ara_grammar_answer_key.pdf" if answer_key else "ara_grammar.pdf"
     return FileResponse(path, filename=filename, media_type="application/pdf")

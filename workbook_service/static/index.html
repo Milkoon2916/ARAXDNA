@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>워크북 생성기</title>
 <style>
-  body { font-family: "Noto Sans KR", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 16px; color:#1a1a1a; }
+  body { font-family: "NanumGothic", "Nanum Gothic", sans-serif; max-width: 860px; margin: 40px auto; padding: 0 16px; color:#1a1a1a; }
   h1 { font-size: 20px; }
   label { display:block; font-weight:700; margin-top: 16px; margin-bottom: 4px; font-size: 13px; }
   textarea { width:100%; height: 220px; font-size: 13px; padding: 8px; box-sizing:border-box; }
@@ -27,6 +27,21 @@
   .hint { font-size:11px; color:#777; margin-top:2px; }
   .hint a { color:#0070C0; font-weight:700; text-decoration:none; }
   .hint a:hover { text-decoration:underline; }
+
+  .step-grid {
+    display:grid; grid-template-columns: repeat(2, 1fr); gap: 6px 16px;
+    border: 1px solid #ddd; border-radius: 6px; padding: 12px 14px; margin-top: 6px;
+  }
+  .step-grid label {
+    display:flex; align-items:center; gap: 8px; font-weight:400; margin:0;
+    font-size: 13px; cursor:pointer;
+  }
+  .step-grid input[type=checkbox] { width:auto; margin:0; }
+  .step-toolbar { display:flex; gap: 10px; margin-top: 8px; }
+  .step-toolbar button {
+    margin-top:0; padding: 4px 10px; font-size: 12px; font-weight:600;
+    background:#eee; color:#333; border-radius: 4px;
+  }
 </style>
 </head>
 <body>
@@ -53,6 +68,13 @@
   <label for="passage">지문 (영어 원문)</label>
   <textarea id="passage" placeholder="여기에 영어 지문을 붙여넣으세요..."></textarea>
 
+  <label>포함할 워크북 단계</label>
+  <div class="step-grid" id="stepGrid"></div>
+  <div class="step-toolbar">
+    <button type="button" id="selectAllSteps">전체 선택</button>
+    <button type="button" id="selectNoneSteps">전체 해제</button>
+  </div>
+
   <button id="generateBtn">워크북 생성</button>
   <div id="status"></div>
   <div id="error"></div>
@@ -63,7 +85,7 @@
   <button id="downloadBtn" class="secondary" style="display:none;">PDF 다운로드</button>
 
 <script type="module">
-  import { generateWorkbook, MODEL_OPTIONS } from "./workbook-generator.js";
+  import { generateWorkbook, MODEL_OPTIONS, STEP_LABELS, ALL_STEPS } from "./workbook-generator.js";
   import { renderWorkbookHTML } from "./workbook-renderer.js";
 
   const $ = (id) => document.getElementById(id);
@@ -78,6 +100,31 @@
     modelSelect.appendChild(el);
   });
 
+  // 단계 체크박스 채우기 (기본: 전부 체크)
+  const stepGrid = $("stepGrid");
+  ALL_STEPS.forEach((step) => {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = String(step);
+    cb.checked = true;
+    cb.className = "step-checkbox";
+    label.appendChild(cb);
+    label.append(`STEP ${step} · ${STEP_LABELS[step]}`);
+    stepGrid.appendChild(label);
+  });
+
+  function getSelectedSteps() {
+    return [...document.querySelectorAll(".step-checkbox:checked")].map((cb) => Number(cb.value));
+  }
+
+  $("selectAllSteps").addEventListener("click", () => {
+    document.querySelectorAll(".step-checkbox").forEach((cb) => (cb.checked = true));
+  });
+  $("selectNoneSteps").addEventListener("click", () => {
+    document.querySelectorAll(".step-checkbox").forEach((cb) => (cb.checked = false));
+  });
+
   // API 키는 로컬 저장 (편의용)
   const savedKey = localStorage.getItem("gemini_api_key");
   if (savedKey) $("apiKey").value = savedKey;
@@ -89,10 +136,12 @@
     const passage = $("passage").value.trim();
     const model = modelSelect.value;
     const title = $("title").value.trim() || "영어 지문 워크북";
+    const steps = getSelectedSteps();
 
     $("error").textContent = "";
     if (!apiKey) return ($("error").textContent = "Gemini API 키를 입력하세요.");
     if (!passage) return ($("error").textContent = "지문을 입력하세요.");
+    if (steps.length === 0) return ($("error").textContent = "포함할 워크북 단계를 하나 이상 체크하세요.");
 
     localStorage.setItem("gemini_api_key", apiKey);
 
@@ -100,22 +149,21 @@
     $("downloadBtn").style.display = "none";
     $("preview-wrap").style.display = "none";
 
-    const stepLabels = { 1: "해석", 2: "빈칸 채우기", 3: "문장 순서", 4: "언스크램블" };
-
     try {
       const workbook = await generateWorkbook({
         passage,
         apiKey,
         model,
+        steps,
         onProgress: ({ step, status, message }) => {
           $("status").textContent =
-            status === "start" ? `STEP ${step} (${stepLabels[step]}) 생성 중...`
+            status === "start" ? `STEP ${step} (${STEP_LABELS[step]}) 생성 중...`
             : status === "retry" ? message
-            : `STEP ${step} (${stepLabels[step]}) 완료`;
+            : `STEP ${step} (${STEP_LABELS[step]}) 완료`;
         },
       });
 
-      lastHtml = renderWorkbookHTML(workbook, { title });
+      lastHtml = renderWorkbookHTML(workbook, { title, steps });
 
       const preview = $("preview");
       preview.srcdoc = lastHtml;

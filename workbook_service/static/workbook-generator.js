@@ -1,7 +1,13 @@
 /**
  * workbook-generator.js
- * 지문(passage)을 넣으면 4단계 워크북 데이터를 생성하는 모듈.
+ * 지문(passage)을 넣으면 10단계 워크북 데이터를 생성하는 모듈 (NE능률 계열 시판 워크북 구성과 동일한 10단계).
  * 브라우저에서 사용자 자신의 Gemini API 키로 직접 호출하는 구조.
+ *
+ * 10단계:
+ *  1. 본문 해석지        2. 빈칸 연습(우리말)   3. 빈칸 연습(영문)
+ *  4. 해석 연습          5. 동사형 연습         6. 어법 선택형 연습
+ *  7. 어색한 곳 찾기 연습 8. 순서배열 연습        9. 영작 연습
+ * 10. Check(종합)
  *
  * 사용 예:
  *   import { generateWorkbook, MODEL_OPTIONS } from "./workbook-generator.js";
@@ -9,6 +15,7 @@
  *     passage: "...",
  *     apiKey: "AIza...",
  *     model: "gemini-3.6-flash",
+ *     steps: [1,2,3,4,5,6,7,8,9,10],   // 체크된 스텝만
  *   });
  */
 
@@ -34,22 +41,36 @@ export const MODEL_OPTIONS = [
 ];
 
 const DEFAULT_MODEL = "gemini-3.6-flash";
-
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const SYSTEM_INSTRUCTION =
-  "당신은 한국 고등학교 영어 내신 교재를 만드는 전문 교사입니다. " +
+  "당신은 한국 고등학교/중학교 영어 내신 교재를 만드는 전문 교사입니다. " +
+  "시중 유명 내신 대비 워크북(NE능률 계열)과 동일한 수준과 형식으로 문제를 만듭니다. " +
   "아래 지문을 분석해서 지시된 형식의 JSON으로만 출력하세요. " +
   "설명, 마크다운, 코드블록 없이 순수 JSON만 반환합니다.";
+
+// 사람이 읽는 단계 이름 (진행상황 표시/체크박스 라벨에 공용으로 사용)
+export const STEP_LABELS = {
+  1: "본문 해석지",
+  2: "빈칸 연습 (우리말)",
+  3: "빈칸 연습 (영문)",
+  4: "해석 연습",
+  5: "동사형 연습",
+  6: "어법 선택형 연습",
+  7: "어색한 곳 찾기 연습",
+  8: "순서배열 연습",
+  9: "영작 연습",
+  10: "Check (종합)",
+};
+export const ALL_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 // ---------------------------------------------------------
 // 2. 공통 Gemini 호출 함수
 // ---------------------------------------------------------
-// 429(쿼터 초과)/503(서버 과부하) 응답에서 자동으로 재시도 대기 시간을 뽑아 기다렸다가 재시도한다.
 function parseRetryDelayMs(errJson) {
   const details = errJson?.error?.details || [];
   const retryInfo = details.find((d) => String(d["@type"] || "").includes("RetryInfo"));
-  const raw = retryInfo?.retryDelay; // 예: "42s"
+  const raw = retryInfo?.retryDelay;
   if (raw) {
     const secs = parseFloat(String(raw).replace("s", ""));
     if (!Number.isNaN(secs)) return Math.ceil(secs * 1000) + 1000;
@@ -104,9 +125,7 @@ async function callGemini({ apiKey, model, prompt, schema, onStatus, maxRetries 
 
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error("Gemini 응답에서 텍스트를 찾을 수 없습니다.");
-  }
+  if (!text) throw new Error("Gemini 응답에서 텍스트를 찾을 수 없습니다.");
 
   try {
     return JSON.parse(text);
@@ -116,9 +135,41 @@ async function callGemini({ apiKey, model, prompt, schema, onStatus, maxRetries 
 }
 
 // ---------------------------------------------------------
-// 4. 1단계: 해석하기
+// 3. 문단 분리 유틸 (Step 1 본문 박스 구분 / Step 7 문맥 단위에 재사용)
 // ---------------------------------------------------------
-const STEP1_SCHEMA = {
+function countSentencesRough(text) {
+  const n = (text.match(/[.!?][")]?(\s|$)/g) || []).length;
+  return Math.max(1, n);
+}
+
+function splitParagraphs(passage) {
+  const raw = passage.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const paragraphs = raw.length > 0 ? raw : [passage.trim()];
+
+  const merged = [];
+  for (const p of paragraphs) {
+    if (
+      merged.length > 0 &&
+      countSentencesRough(p) < 4 &&
+      countSentencesRough(merged[merged.length - 1]) < 8
+    ) {
+      merged[merged.length - 1] = merged[merged.length - 1] + " " + p;
+    } else {
+      merged.push(p);
+    }
+  }
+  if (merged.length > 1 && countSentencesRough(merged[0]) < 4) {
+    merged[1] = merged[0] + " " + merged[1];
+    merged.shift();
+  }
+  return merged;
+}
+
+// ---------------------------------------------------------
+// 4. 마스터 문장 데이터 생성
+//    (Step 1/2/3/4/5/6/9/10 이 전부 이 데이터 하나를 재사용함 — LLM 호출 절약 + 문항 간 표현 일관성 확보)
+// ---------------------------------------------------------
+const MASTER_SCHEMA = {
   type: "OBJECT",
   properties: {
     sentences: {
@@ -127,229 +178,79 @@ const STEP1_SCHEMA = {
         type: "OBJECT",
         properties: {
           id: { type: "INTEGER" },
+          is_heading: { type: "BOOLEAN" },
           en: { type: "STRING" },
           ko: { type: "STRING" },
-        },
-        propertyOrdering: ["id", "en", "ko"],
-      },
-    },
-  },
-  propertyOrdering: ["sentences"],
-};
-
-export async function generateStep1({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
-  const prompt = `
-다음 영어 지문을 문장 단위로 분리하고, 각 문장에 대해 자연스러운 한글 해석(직역보다 의역 우선)을 작성하세요.
-문장 id는 1부터 순서대로 매기세요. 인용부호나 콜론으로 인한 문장 내 세부 구분은 하나의 문장으로 취급하세요.
-
-[지문]
-${passage}
-`.trim();
-
-  return callGemini({ apiKey, model, prompt, schema: STEP1_SCHEMA, onStatus });
-}
-
-// ---------------------------------------------------------
-// 5. 2단계: 어법/어휘 빈칸
-// ---------------------------------------------------------
-export const BLANK_MARKER = "___BLANK___";
-
-const STEP2_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    sentences: {
-      type: "ARRAY",
-      items: {
-        type: "OBJECT",
-        properties: {
-          sentence_id: { type: "INTEGER" },
-          blanked_en: { type: "STRING" },
-          blanks: {
+          highlights: {
             type: "ARRAY",
             items: {
               type: "OBJECT",
               properties: {
-                answer: { type: "STRING" },
+                en: { type: "STRING" },
+                ko: { type: "STRING" },
                 type: { type: "STRING", enum: ["grammar", "vocab"] },
-                grammar_point: { type: "STRING" },
               },
-              propertyOrdering: ["answer", "type", "grammar_point"],
+              propertyOrdering: ["en", "ko", "type"],
             },
           },
+          verb_targets: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                base_form: { type: "STRING" },
+                correct_form: { type: "STRING" },
+              },
+              propertyOrdering: ["base_form", "correct_form"],
+            },
+          },
+          choice_points: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                correct: { type: "STRING" },
+                incorrect: { type: "STRING" },
+              },
+              propertyOrdering: ["correct", "incorrect"],
+            },
+          },
+          hint_words: { type: "ARRAY", items: { type: "STRING" } },
         },
-        propertyOrdering: ["sentence_id", "blanked_en", "blanks"],
+        propertyOrdering: ["id", "is_heading", "en", "ko", "highlights", "verb_targets", "choice_points", "hint_words"],
       },
     },
   },
   propertyOrdering: ["sentences"],
 };
 
-// 문장 수 대략 세기 (마침표/느낌표/물음표 기준)
-function countSentencesRough(passage) {
-  const n = (passage.match(/[.!?][")]?(\s|$)/g) || []).length;
-  return Math.max(1, n);
-}
-
-// 빈칸 개수 = 문장당 최소 5개
-const MIN_BLANKS_PER_SENTENCE = 5;
-
-function calcBlankCount(passage) {
-  const sentenceCount = countSentencesRough(passage);
-  return sentenceCount * MIN_BLANKS_PER_SENTENCE;
-}
-
-export async function generateStep2({
-  passage,
-  apiKey,
-  model = DEFAULT_MODEL,
-  sentenceMap, // 1단계에서 만든 { id, en } 배열을 넘기면 sentence_id 정합성이 좋아짐
-  onStatus,
-}) {
-  const sentenceCount = sentenceMap ? sentenceMap.length : countSentencesRough(passage);
-  const blankCount = sentenceCount * MIN_BLANKS_PER_SENTENCE;
-  const grammarCount = Math.round(blankCount * 0.6);
-  const vocabCount = blankCount - grammarCount;
-
+export async function generateMasterSentences({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
   const prompt = `
-다음 영어 지문에서 내신 시험에 나올 만한 어법 포인트와 핵심 어휘를 골라 빈칸 문제를 만드세요.
+다음 영어 지문을 분석해서 문장 단위(그리고 소제목이 있다면 소제목도 별도 항목으로) 데이터를 만드세요.
 
-각 문장마다:
-1. blanked_en: 그 문장을 원문 그대로 쓰되, 빈칸으로 만들 단어/표현 자리를 정확히 "${BLANK_MARKER}"로 치환하세요. 빈칸이 아닌 나머지 부분은 원문 철자, 대소문자, 띄어쓰기, 문장부호를 한 글자도 바꾸지 말고 그대로 두세요.
-2. blanks: blanked_en에 등장하는 "${BLANK_MARKER}" 순서와 정확히 같은 순서로, 각 빈칸에 원래 있었던 단어/표현(answer)과 구분(type), 어법 포인트(grammar_point)를 배열로 나열하세요.
+각 항목(sentence)에 대해:
+- is_heading: 소제목(예: "Getting to Know Your Anger" 같은 문단 제목)이면 true, 일반 문장이면 false.
+- en: 원문 그대로 (철자/대소문자/구두점 변경 금지)
+- ko: 자연스러운 한글 해석 (소제목이면 소제목의 한글 번역)
+- highlights: 내신 시험에 나올 만한 핵심 어법 포인트/어휘를 3~6개 골라 각각 { en: 문장 속 정확한 원문 표현, ko: 그 표현에 대응하는 한글 해석 속 정확한 표현, type: "grammar" 또는 "vocab" } 로 나열 (문장이 짧으면 개수를 줄여도 됨, is_heading이면 빈 배열)
+- verb_targets: 그 문장에서 동사형 연습에 쓸 만한 동사 0~3개를 { base_form: 원형/괄호에 제시할 기본형, correct_form: en 안에 실제 등장하는 정확한 활용형 } 로 나열 (is_heading이면 빈 배열)
+- choice_points: 어법 선택형 문제에 쓸 어법 포인트 0~3개를 { correct: en 안에 실제 등장하는 정확한 표현, incorrect: 그럴듯하지만 틀린 대안 표현 } 으로 나열 (is_heading이면 빈 배열)
+- hint_words: 영작 연습에 쓸, en에 실제 등장하는 핵심 단어를 원문 등장 순서 그대로 3~8개 나열 (is_heading이면 빈 배열)
 
-조건:
-- 지문은 총 ${sentenceCount}개의 문장으로 이루어져 있습니다. 문장마다 최소 ${MIN_BLANKS_PER_SENTENCE}개의 빈칸이 나오도록, 전체 빈칸 수를 약 ${blankCount}개(어법 포인트 약 ${grammarCount}개, 핵심 어휘 약 ${vocabCount}개)로 만드세요.
-- 문장이 짧아서 ${MIN_BLANKS_PER_SENTENCE}개를 채우기 어렵다면 그 문장에서 가능한 한 최대한 많은 단어/표현을 빈칸으로 만드세요 (전치사, 접속사, 관사, 조동사 등도 빈칸 후보로 적극 활용).
-- "${BLANK_MARKER}"는 반드시 이 정확한 문자열이어야 하며, blanks 배열의 개수는 blanked_en 안의 "${BLANK_MARKER}" 개수와 정확히 일치해야 합니다.
-- type이 "grammar"인 경우 grammar_point에 해당 어법 이름(예: "관계대명사 계속적 용법")을 적으세요. type이 "vocab"이면 grammar_point는 빈 문자열로 두세요.
-- sentence_id는 1부터 시작해 지문 순서대로 매기세요.
+id는 1부터 지문에 등장하는 순서대로 (소제목 포함) 매기세요.
+highlights.en / verb_targets.correct_form / choice_points.correct 는 반드시 해당 문장의 en 안에 정확히 그대로 포함된 부분 문자열이어야 합니다.
 
 [지문]
 ${passage}
 `.trim();
 
-  return callGemini({ apiKey, model, prompt, schema: STEP2_SCHEMA, onStatus });
+  return callGemini({ apiKey, model, prompt, schema: MASTER_SCHEMA, onStatus });
 }
 
 // ---------------------------------------------------------
-// 6. 3단계: 문단별 문장 순서 배열
+// 5. 순서배열/언스크램블용 청크 데이터 (Step 8에서 사용)
 // ---------------------------------------------------------
-const STEP3_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    sets: {
-      type: "ARRAY",
-      items: {
-        type: "OBJECT",
-        properties: {
-          paragraph_id: { type: "INTEGER" },
-          correct_order: {
-            type: "ARRAY",
-            items: { type: "STRING" }, // display_id 순서, 예: ["B","A","C"]
-          },
-          shuffled_sentences: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                display_id: { type: "STRING" },
-                text: { type: "STRING" },
-              },
-              propertyOrdering: ["display_id", "text"],
-            },
-          },
-        },
-        propertyOrdering: ["paragraph_id", "correct_order", "shuffled_sentences"],
-      },
-    },
-  },
-  propertyOrdering: ["sets"],
-};
-
-// 문단 분리 + 4문장 미만 문단은 인접 문단과 합치기 (LLM에 맡기지 않고 전처리)
-function splitParagraphs(passage) {
-  const raw = passage
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  const paragraphs = raw.length > 0 ? raw : [passage.trim()];
-
-  const countSentences = (p) =>
-    (p.match(/[.!?][")]?(\s|$)/g) || []).length || 1;
-
-  const merged = [];
-  for (const p of paragraphs) {
-    if (
-      merged.length > 0 &&
-      countSentences(p) < 4 &&
-      countSentences(merged[merged.length - 1]) < 8
-    ) {
-      merged[merged.length - 1] = merged[merged.length - 1] + " " + p;
-    } else {
-      merged.push(p);
-    }
-  }
-  // 맨 앞 문단이 짧게 혼자 남은 경우 다음 문단과 합치기
-  if (merged.length > 1 && countSentences(merged[0]) < 4) {
-    merged[1] = merged[0] + " " + merged[1];
-    merged.shift();
-  }
-  return merged;
-}
-
-export async function generateStep3({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
-  const paragraphs = splitParagraphs(passage);
-
-  const results = await Promise.all(
-    paragraphs.map((paragraphText, idx) => {
-      const prompt = `
-다음은 지문의 한 문단입니다. 이 문단을 문장 단위로 분리한 뒤, 순서를 무작위로 섞어서 제시하세요.
-학생은 섞인 문장을 원래 순서대로 재배열하는 문제를 풀게 됩니다.
-
-조건:
-- display_id는 A, B, C... 알파벳으로 shuffled_sentences 각 항목에 부여하세요 (섞인 순서 그대로).
-- correct_order에는 display_id를 원래(정답) 순서대로 나열하세요.
-- 문장이 4개 미만이면 억지로 쪼개지 말고 있는 그대로 사용하세요.
-
-[문단 ${idx + 1}]
-${paragraphText}
-`.trim();
-
-      return callGemini({
-        apiKey,
-        model,
-        prompt,
-        onStatus,
-        schema: {
-          type: "OBJECT",
-          properties: {
-            correct_order: { type: "ARRAY", items: { type: "STRING" } },
-            shuffled_sentences: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: {
-                  display_id: { type: "STRING" },
-                  text: { type: "STRING" },
-                },
-                propertyOrdering: ["display_id", "text"],
-              },
-            },
-          },
-          propertyOrdering: ["correct_order", "shuffled_sentences"],
-        },
-      }).then((r) => ({ paragraph_id: idx + 1, ...r }));
-    })
-  );
-
-  return { sets: results };
-}
-
-// ---------------------------------------------------------
-// 7. 4단계: 언스크램블 (관사+수식어+명사 한 덩어리)
-// ---------------------------------------------------------
-const STEP4_SCHEMA = {
+const CHUNK_SCHEMA = {
   type: "OBJECT",
   properties: {
     unscramble: {
@@ -368,60 +269,119 @@ const STEP4_SCHEMA = {
   propertyOrdering: ["unscramble"],
 };
 
-export async function generateStep4({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
+export async function generateChunks({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
   const prompt = `
-다음 영어 지문의 모든 문장에 대해 언스크램블(어순 배열) 문제를 만드세요.
+다음 영어 지문의 모든 문장(소제목 제외)에 대해 순서배열(어순 배열) 문제를 만드세요.
 
 청크 분리 규칙:
-- 관사(a/an/the)는 뒤에 오는 형용사·명사(구)와 반드시 하나의 청크로 묶습니다 (예: "the beautiful girl"은 한 덩어리이며, 절대 "the" / "beautiful" / "girl"로 따로 쪼개지 않습니다).
-- 전치사+명사구도 가능하면 하나의 청크로 묶으세요 (예: "in the morning").
+- 관사(a/an/the)는 뒤에 오는 형용사·명사(구)와 반드시 하나의 청크로 묶습니다.
+- 전치사+명사구도 가능하면 하나의 청크로 묶으세요.
 - 조동사+본동사 등 동사구는 분리하지 않습니다.
-- 문장당 청크는 최소 3개, 최대 8개가 되도록 조정하세요.
-- shuffled_chunks는 correct_chunks를 무작위로 섞은 배열입니다 (섞인 순서가 원래 순서와 완전히 같으면 안 됩니다).
-- sentence_id는 지문 순서대로 1부터 매기세요 (문장 하나당 하나의 unscramble 항목).
+- 문장당 청크는 최소 3개, 최대 8개.
+- shuffled_chunks는 correct_chunks를 무작위로 섞은 배열이며, 섞인 순서가 원래 순서와 완전히 같으면 안 됩니다.
+- sentence_id는 지문에서 그 문장이 몇 번째 문장인지(소제목 포함해서 순서대로 센 id)와 일치해야 합니다.
 
 [지문]
 ${passage}
 `.trim();
 
-  return callGemini({ apiKey, model, prompt, schema: STEP4_SCHEMA, onStatus });
+  return callGemini({ apiKey, model, prompt, schema: CHUNK_SCHEMA, onStatus });
 }
 
 // ---------------------------------------------------------
-// 8. 전체 워크북 생성 (4단계 한 번에)
+// 6. 어색한 곳 찾기 연습용 데이터 (Step 7)
 // ---------------------------------------------------------
-export async function generateWorkbook({ passage, apiKey, model = DEFAULT_MODEL, onProgress }) {
-  const report = (step) => onProgress && onProgress(step);
-  const statusFor = (step) => (message) => report({ step, status: "retry", message });
+const ODD_VARIANT_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    text: { type: "STRING" },
+    candidates: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          phrase: { type: "STRING" },
+          is_wrong: { type: "BOOLEAN" },
+          correct_form: { type: "STRING" },
+        },
+        propertyOrdering: ["phrase", "is_wrong", "correct_form"],
+      },
+    },
+  },
+  propertyOrdering: ["text", "candidates"],
+};
 
-  report({ step: 1, status: "start" });
-  const step1 = await generateStep1({ passage, apiKey, model, onStatus: statusFor(1) });
-  report({ step: 1, status: "done" });
+export async function generateOddParagraphs({ passage, apiKey, model = DEFAULT_MODEL, onStatus }) {
+  const paragraphs = splitParagraphs(passage);
 
-  report({ step: 2, status: "start" });
-  const step2 = await generateStep2({
-    passage,
-    apiKey,
-    model,
-    sentenceMap: step1.sentences,
-    onStatus: statusFor(2),
-  });
-  report({ step: 2, status: "done" });
+  const results = await Promise.all(
+    paragraphs.map((paragraphText, idx) => {
+      const prompt = `
+다음은 지문의 한 문단입니다. 이 문단을 바탕으로 "어색한 곳 찾기" 문제 두 종류를 만드세요.
 
-  report({ step: 3, status: "start" });
-  const step3 = await generateStep3({ passage, apiKey, model, onStatus: statusFor(3) });
-  report({ step: 3, status: "done" });
+1) context_variant (문맥상 어색한 것 찾기): 문단 속 밑줄 후보 단어를 5~8개 고르되, 그 중 정확히 3개는 문맥상 반대/부적절한 의미의 다른 단어로 바꿔치기하고, 나머지는 원문 그대로 둡니다.
+   text: 바꿔치기가 반영된(즉 3개는 이미 틀린 단어로 교체된) 문단 전체 텍스트.
+   candidates: text 안에 실제로 등장하는 밑줄 후보들을 등장 순서대로 나열. is_wrong=true인 3개는 correct_form에 원래(정답) 단어를 적고, 나머지(is_wrong=false)는 correct_form을 빈 문자열로 둡니다.
 
-  report({ step: 4, status: "start" });
-  const step4 = await generateStep4({ passage, apiKey, model, onStatus: statusFor(4) });
-  report({ step: 4, status: "done" });
+2) grammar_variant (어법상 어색한 것 찾기): 같은 방식이지만 의미가 아니라 어법(문법 형태: 수일치, 시제, 태, to부정사/동명사, 관계사 등)이 틀리도록 정확히 3곳을 바꿉니다.
 
-  return {
-    passage,
-    model,
-    step1_translation: step1,
-    step2_blanks: step2,
-    step3_ordering: step3,
-    step4_unscramble: step4,
-  };
+두 variant 모두 candidates의 phrase는 해당 variant의 text 안에 정확히 그대로 등장하는 부분 문자열이어야 합니다.
+
+[문단]
+${paragraphText}
+`.trim();
+
+      return callGemini({
+        apiKey,
+        model,
+        prompt,
+        onStatus,
+        schema: {
+          type: "OBJECT",
+          properties: {
+            context_variant: ODD_VARIANT_SCHEMA,
+            grammar_variant: ODD_VARIANT_SCHEMA,
+          },
+          propertyOrdering: ["context_variant", "grammar_variant"],
+        },
+      }).then((r) => ({ paragraph_id: idx + 1, ...r }));
+    })
+  );
+
+  return { paragraphs: results };
+}
+
+// ---------------------------------------------------------
+// 7. 전체 워크북 생성 — steps 배열에 있는 단계만 필요한 호출을 수행
+// ---------------------------------------------------------
+export async function generateWorkbook({ passage, apiKey, model = DEFAULT_MODEL, steps = ALL_STEPS, onProgress }) {
+  const need = new Set(steps);
+  const report = (step, status, message) => onProgress && onProgress({ step, status, message });
+  const statusFor = (step) => (message) => report(step, "retry", message);
+
+  const workbook = { passage, model, steps: [...need].sort((a, b) => a - b) };
+
+  // 마스터 문장 데이터: 1,2,3,4,5,6,9,10번 중 하나라도 선택되면 필요
+  const needsMaster = [1, 2, 3, 4, 5, 6, 9, 10].some((s) => need.has(s));
+  if (needsMaster) {
+    report(1, "start");
+    workbook.master = await generateMasterSentences({ passage, apiKey, model, onStatus: statusFor(1) });
+    report(1, "done");
+  }
+
+  // 청크 데이터: 8번 또는 10번(Check에서 순서배열 항목에 재사용)이 선택되면 필요
+  if (need.has(8) || need.has(10)) {
+    report(8, "start");
+    workbook.chunks = await generateChunks({ passage, apiKey, model, onStatus: statusFor(8) });
+    report(8, "done");
+  }
+
+  // 어색한 곳 찾기: 7번이 선택되면 필요
+  if (need.has(7)) {
+    report(7, "start");
+    workbook.odd = await generateOddParagraphs({ passage, apiKey, model, onStatus: statusFor(7) });
+    report(7, "done");
+  }
+
+  return workbook;
 }
