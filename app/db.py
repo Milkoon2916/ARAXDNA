@@ -226,6 +226,24 @@ class RealDB:
     def list_materials(self, passage_id: int):
         return self.session.query(MaterialModel).filter_by(passage_id=passage_id).all()
 
+    def get_material(self, material_id: int, teacher_id: int) -> MaterialModel | None:
+        row = self.session.get(MaterialModel, material_id)
+        if not row:
+            return None
+        passage = self.session.get(PassageModel, row.passage_id)
+        if not passage or passage.teacher_id != teacher_id:
+            return None
+        return row
+
+    def get_material(self, material_id: int, teacher_id: int) -> MaterialModel | None:
+        row = self.session.get(MaterialModel, material_id)
+        if not row:
+            return None
+        passage = self.session.get(PassageModel, row.passage_id)
+        if not passage or passage.teacher_id != teacher_id:
+            return None
+        return row
+
 
 def get_db():
     """FastAPI가 요청 하나당 DB 연결을 열었다가, 끝나면 자동으로 닫아줌."""

@@ -5,11 +5,13 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from .auth import get_current_teacher_id
 from .db import get_db
 from .llm import call_gemini_json
+from .pdf_render import render_analysis_pdf, render_ox_pdf, render_workbook_pdf
 from .prompts import (
     ANALYSIS_MODEL,
     OX_MODEL,
@@ -95,3 +97,32 @@ def get_materials(passage_id: int, teacher_id: int = Depends(get_current_teacher
         raise HTTPException(status_code=404, detail="지문을 찾을 수 없어요.")
     rows = db.list_materials(passage_id)
     return [{"id": r.id, "type": r.type, "content": json.loads(r.content), "pdf_path": r.pdf_path} for r in rows]
+
+
+@router.get("/materials/{material_id}/pdf")
+def download_material_pdf(material_id: int, teacher_id: int = Depends(get_current_teacher_id), db=Depends(get_db)):
+    material = db.get_material(material_id, teacher_id)
+    if not material:
+        raise HTTPException(status_code=404, detail="자료를 찾을 수 없어요.")
+
+    content = json.loads(material.content)
+    passage = db.get_passage(material.passage_id, teacher_id)
+    title = (passage.title if passage else None) or "학습자료"
+
+    if material.type == "analysis":
+        pdf_bytes = render_analysis_pdf(content, title=title)
+    elif material.type == "workbook":
+        pdf_bytes = render_workbook_pdf(content, title=title)
+    elif material.type == "ox":
+        pdf_bytes = render_ox_pdf(content, title=title)
+    else:
+        raise HTTPException(status_code=400, detail="이 자료 유형은 아직 PDF 다운로드를 지원하지 않아요.")
+
+    filename = f"{title}_{material.type}.pdf"
+    from urllib.parse import quote
+    encoded_filename = quote(filename)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"material.pdf\"; filename*=UTF-8''{encoded_filename}"},
+    )

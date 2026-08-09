@@ -5,12 +5,16 @@
 지금은 teachers(선생님 계정)만 우선 구현. 단어장/학생/지문/결과 테이블은
 인증 흐름이 실제로 동작하는 걸 확인한 다음 순서대로 추가하면 됨.
 """
+import os
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
-DATABASE_URL = "sqlite:///./app.db"  # 로컬 파일 하나에 전부 저장됨 (배포 시 경로만 바꾸면 됨)
+# 로컬 개발: 프로젝트 폴더에 app.db 파일 하나로 저장됨
+# Render 배포: DATABASE_URL 환경변수로 영구 디스크 경로(예: sqlite:////app/data/app.db)를 지정해야
+#   재배포할 때마다 데이터가 사라지지 않음 (render.yaml의 disk 설정과 짝을 이룸)
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
