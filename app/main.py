@@ -35,6 +35,11 @@ def vocabulary_page():
     return FileResponse("static/vocabulary.html")
 
 
+@app.get("/settings/")
+def settings_page():
+    return FileResponse("static/settings.html")
+
+
 @app.get("/quiz.html")
 def quiz_page():
     return FileResponse("static/quiz.html")
