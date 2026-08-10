@@ -17,21 +17,10 @@ env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 FONT_REGULAR = (FONTS_DIR / "NanumGothic.ttf").as_uri()
 FONT_BOLD = (FONTS_DIR / "NanumGothicBold.ttf").as_uri()
 
-NOTE_LABELS = {
-    "comprehension": "독해 포인트",
-    "grammar": "어법 포인트",
-    "blank": "빈칸",
-    "writing": "서술형",
-    "implication": "함의추론",
-    "theme": "주제",
-}
-
 
 def render_analysis_pdf(result: dict, title: str | None = None) -> bytes:
     template = env.get_template("analysis_pdf.html")
-    html_str = template.render(
-        result=result, title=title, font_regular=FONT_REGULAR, font_bold=FONT_BOLD, note_labels=NOTE_LABELS
-    )
+    html_str = template.render(result=result, title=title, font_regular=FONT_REGULAR, font_bold=FONT_BOLD)
     return HTML(string=html_str, base_url=str(BASE_DIR)).write_pdf()
 
 

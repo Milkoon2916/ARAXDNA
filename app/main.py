@@ -35,11 +35,6 @@ def vocabulary_page():
     return FileResponse("static/vocabulary.html")
 
 
-@app.get("/settings/")
-def settings_page():
-    return FileResponse("static/settings.html")
-
-
 @app.get("/quiz.html")
 def quiz_page():
     return FileResponse("static/quiz.html")
@@ -63,11 +58,6 @@ def workbook_page():
 @app.get("/comprehension/")
 def comprehension_page():
     return FileResponse("static/comprehension.html")
-
-
-@app.get("/grammar-quiz/")
-def grammar_quiz_page():
-    return FileResponse("static/grammar-quiz.html")
 
 # 이후 여기에 기존 워크북/지문분석/OX 라우터, 그리고 새로 옮길 단어장 라우터를
 # 각각 Depends(get_current_teacher_id)로 보호해서 include_router 하면 됨.

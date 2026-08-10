@@ -14,7 +14,6 @@ from .db import get_db
 from .llm import call_gemini_json
 from .docx_render import render_grammar_quiz_docx
 from .pdf_render import render_analysis_pdf, render_ox_pdf, render_workbook_pdf
-from .thesaurus import enrich_vocabulary
 from .prompts import (
     ANALYSIS_MODEL,
     GRAMMAR_QUIZ_MODEL,
@@ -47,18 +46,6 @@ async def _get_teacher_gemini(teacher_id: int, db):
     return decrypt_api_key(teacher.gemini_api_key_encrypted), teacher.gemini_model
 
 
-def _unwrap_analysis(result: dict) -> dict:
-    """AnalysisResponse 스키마는 Gemini에게 {"passages": [ {...} ]} 형태로 받지만,
-    PDF 템플릿/화면 코드/단어 자동추출은 전부 최상위에 sentences/summary/vocabulary가
-    있다고 가정하므로, 여기서 미리 첫 번째 passage를 꺼내 평평하게 만들어준다.
-    (이 unwrap이 없으면 PDF가 빈 문서로 나오고 단어 자동추출도 빈 목록이 됨)"""
-    if isinstance(result, dict) and "passages" in result:
-        passages = result.get("passages") or []
-        if passages:
-            return passages[0]
-    return result
-
-
 @router.post("/passage-analysis")
 async def generate_analysis(
     body: GenerateRequest,
@@ -71,9 +58,6 @@ async def generate_analysis(
     system_prompt = build_analysis_prompt()
     user_message = build_analysis_user_message(body.passage_text, body.target_grammar)
     result = await call_gemini_json(api_key, model or ANALYSIS_MODEL, system_prompt, user_message)
-    result = _unwrap_analysis(result)
-    # Datamuse는 동기(httpx.Client) 네트워크 호출이라 이벤트 루프를 막지 않도록 스레드에서 실행
-    await asyncio.to_thread(enrich_vocabulary, result)
 
     material = db.create_material(passage.id, "analysis", json.dumps(result, ensure_ascii=False))
     return {"passage_id": passage.id, "material_id": material.id, "result": result}
@@ -151,9 +135,6 @@ async def generate_all(
         return_exceptions=True,
     )
     analysis_result, workbook_result, ox_result, grammar_result = results
-    if not isinstance(analysis_result, Exception):
-        analysis_result = _unwrap_analysis(analysis_result)
-        await asyncio.to_thread(enrich_vocabulary, analysis_result)
 
     materials = {}
     errors = {}
