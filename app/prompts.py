@@ -12,9 +12,9 @@ import json
 
 from .analysis_schema import AnalysisResponse
 
-ANALYSIS_MODEL = "gemini-2.5-flash-lite"
-WORKBOOK_MODEL = "gemini-2.5-flash"
-OX_MODEL = "gemini-2.5-flash"
+ANALYSIS_MODEL = "gemini-3.5-flash-lite"
+WORKBOOK_MODEL = "gemini-3.6-flash"
+OX_MODEL = "gemini-3.6-flash"
 
 ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """당신은 한국 수능/CSAT 영어 독해 지문을 분석하는 전문 튜터입니다.
 주어진 영어 지문을 문장 단위로 분석하여, 아래 JSON 스키마에 정확히 맞는 결과만 반환하세요.
@@ -127,7 +127,7 @@ def build_ox_user_message(passage_text: str) -> str:
 
 
 # ---------- 목표 어법 문제 (문법 테스트, 레퍼런스 형식) ----------
-GRAMMAR_QUIZ_MODEL = "gemini-2.5-flash"
+GRAMMAR_QUIZ_MODEL = "gemini-3.6-flash"
 
 GRAMMAR_QUIZ_SYSTEM_PROMPT = """당신은 한국 중·고등학교 영어 문법 테스트지를 만드는 전문 튜터입니다.
 주어진 지문과 목표 어법을 바탕으로 문법 테스트 10문항을 JSON으로만 생성하세요.
