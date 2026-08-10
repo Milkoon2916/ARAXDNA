@@ -193,7 +193,7 @@ function renderAnalysis(result, materialId){
   (result.sentences||[]).forEach(sent => {
     const badge = sent.badge ? `<span class="badge">${sent.badge}</span>` : '';
     const enText = (sent.tokens||[]).map(t=>t.text).join(' ');
-    const notes = (sent.notes||[]).map(n=>`· ${n.text||n.content||''}`).join('<br>');
+    const notes = (sent.notes||[]).map(n=>`· ${n.body||n.text||n.content||''}`).join('<br>');
     html += `<div class="sentence-block">${badge}<div class="en">[${sent.num}] ${enText}</div>
       <div class="ko">${sent.translation||''}</div><div class="notes">${notes}</div></div>`;
   });

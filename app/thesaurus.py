@@ -1,5 +1,5 @@
 """
-Gemini가 생성한 유의어/반의어(app/prompt.py 6번 항목)를 Datamuse API로 교차 검증한다.
+Gemini가 생성한 유의어/반의어(app/prompts.py 6번 항목)를 Datamuse API로 교차 검증한다.
 Datamuse(https://www.datamuse.com/api/)는 WordNet 기반 무료 사전 API로, API 키가
 필요 없다 (비상업적 이용 기준 1일 10만 건).
 
@@ -16,9 +16,12 @@ Datamuse는 md=f 옵션으로 각 단어의 사용 빈도(백만 단어당 등�
 안 맞는 단어(예: exigent)가 섞여 들어오는 걸 막기 위해 빈도가 일정 기준 이상인 단어만 후보로
 채택한다. 기준을 못 넘는 단어만 있으면 그냥 후보 없음으로 처리해서(빈 리스트) Gemini가 이미
 제시한 값이 그대로 유지되게 한다 (억지로 어려운 단어를 끼워넣지 않기 위함).
+
+원본(passage-analyzer) 버전은 pydantic PassageAnalysis 객체를 in-place 수정했지만,
+unified-site 쪽은 call_gemini_json이 돌려주는 순수 dict를 그대로 저장/렌더링에 쓰므로
+여기서는 dict 리스트를 대상으로 동작하도록 조정했다.
 """
 import httpx
-from .schemas import PassageAnalysis
 
 DATAMUSE_URL = "https://api.datamuse.com/words"
 _TIMEOUT = 3.0
@@ -82,10 +85,12 @@ def _merge(ai_value: str | None, dict_words: list[str]) -> str | None:
     return ai_value  # 사전에 (빈도 기준을 만족하는) 후보가 없으면 Gemini 값 유지
 
 
-def enrich_vocabulary(passage: PassageAnalysis) -> None:
-    """passage.vocabulary의 synonym/antonym을 Datamuse로 검증·보강한다 (in-place 수정)."""
-    for item in passage.vocabulary:
-        syn_candidates = _lookup(item.word, "rel_syn")
-        ant_candidates = _lookup(item.word, "rel_ant")
-        item.synonym = _merge(item.synonym, syn_candidates)
-        item.antonym = _merge(item.antonym, ant_candidates)
+def enrich_vocabulary(passage: dict) -> None:
+    """passage["vocabulary"](딕셔너리 리스트)의 synonym/antonym을 Datamuse로 검증·보강한다
+    (in-place 수정). passage에 vocabulary 키가 없거나 비어 있으면 아무것도 하지 않는다."""
+    for item in passage.get("vocabulary") or []:
+        word = item.get("word", "")
+        syn_candidates = _lookup(word, "rel_syn")
+        ant_candidates = _lookup(word, "rel_ant")
+        item["synonym"] = _merge(item.get("synonym"), syn_candidates)
+        item["antonym"] = _merge(item.get("antonym"), ant_candidates)

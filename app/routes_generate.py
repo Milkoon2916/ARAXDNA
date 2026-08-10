@@ -14,6 +14,7 @@ from .db import get_db
 from .llm import call_gemini_json
 from .docx_render import render_grammar_quiz_docx
 from .pdf_render import render_analysis_pdf, render_ox_pdf, render_workbook_pdf
+from .thesaurus import enrich_vocabulary
 from .prompts import (
     ANALYSIS_MODEL,
     GRAMMAR_QUIZ_MODEL,
@@ -71,6 +72,8 @@ async def generate_analysis(
     user_message = build_analysis_user_message(body.passage_text, body.target_grammar)
     result = await call_gemini_json(api_key, model or ANALYSIS_MODEL, system_prompt, user_message)
     result = _unwrap_analysis(result)
+    # Datamuse는 동기(httpx.Client) 네트워크 호출이라 이벤트 루프를 막지 않도록 스레드에서 실행
+    await asyncio.to_thread(enrich_vocabulary, result)
 
     material = db.create_material(passage.id, "analysis", json.dumps(result, ensure_ascii=False))
     return {"passage_id": passage.id, "material_id": material.id, "result": result}
@@ -150,6 +153,7 @@ async def generate_all(
     analysis_result, workbook_result, ox_result, grammar_result = results
     if not isinstance(analysis_result, Exception):
         analysis_result = _unwrap_analysis(analysis_result)
+        await asyncio.to_thread(enrich_vocabulary, analysis_result)
 
     materials = {}
     errors = {}
