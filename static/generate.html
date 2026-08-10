@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>통합 생성 · 학습자료 제작소</title>
+<link rel="stylesheet" href="/static/design-tokens.css">
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0; padding:0 20px 80px;}
+  .wrap{max-width:940px; margin:0 auto;}
+  nav{padding:24px 0; display:flex; align-items:center; gap:16px;}
+  nav a{color:var(--text-muted); text-decoration:none; font-size:13px;}
+  nav h1{font-size:20px; font-weight:800; margin:0;}
+  .sub{color:var(--text-muted); font-size:13px; margin:-8px 0 20px;}
+
+  .gate{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:32px; text-align:center; color:var(--text-muted);}
+  .gate a{color:var(--accent); font-weight:700;}
+
+  textarea{
+    width:100%; min-height:200px; padding:14px; border:1px solid var(--border-strong); border-radius:10px;
+    font-family:var(--font-body); font-size:14px; background:var(--surface); color:var(--text); resize:vertical;
+  }
+  .row{display:flex; gap:10px; margin-top:10px; align-items:center; flex-wrap:wrap;}
+  input[type=text]{padding:9px 10px; border:1px solid var(--border-strong); border-radius:6px; font-family:var(--font-body); font-size:14px;}
+  button.btn{
+    padding:11px 22px; background:var(--accent); color:#fff; border:none; border-radius:8px;
+    font-family:var(--font-body); font-size:14.5px; font-weight:700; cursor:pointer;
+  }
+  button.btn:disabled{opacity:.5;}
+  button.btn.small{padding:7px 14px; font-size:13px;}
+  .msg{font-size:13.5px; color:var(--danger); margin-top:10px;}
+  .loading{font-size:13.5px; color:var(--text-muted); margin-top:10px;}
+
+  .status-row{display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;}
+  .status-chip{font-size:12px; padding:5px 12px; border-radius:20px; border:1px solid var(--border); color:var(--text-muted);}
+  .status-chip.done{background:var(--accent-soft); color:var(--text); border-color:var(--border-strong);}
+  .status-chip.error{background:var(--danger-soft); color:var(--danger); border-color:var(--danger);}
+
+  .step-tabs{display:flex; gap:8px; margin:24px 0 16px; flex-wrap:wrap;}
+  .step-tab{padding:8px 14px; border:1px solid var(--border); background:var(--surface); border-radius:8px; font-size:13px; cursor:pointer;}
+  .step-tab.active{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .step-panel{display:none;}
+  .step-panel.active{display:block;}
+
+  .sentence-block, .block, .summary-box{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:10px;}
+  .sentence-block .en, .block{font-size:14px;}
+  .sentence-block .ko{font-size:13px; color:var(--text-muted); margin-top:5px;}
+  .sentence-block .notes{font-size:12px; color:var(--text-faint); border-top:1px dashed var(--border); padding-top:6px; margin-top:6px;}
+  .badge{display:inline-block; font-size:11px; padding:2px 8px; border-radius:20px; background:var(--accent-soft); color:var(--text-muted); margin-bottom:6px;}
+  .hint{font-size:12px; color:var(--text-faint); margin-top:5px;}
+
+  .voca-list{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px;}
+  .voca-row{display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid var(--border); font-size:14px;}
+  .voca-row:last-child{border-bottom:none;}
+  .voca-row .meaning{color:var(--text-muted); font-size:13px;}
+  .voca-actions{margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .voca-actions .ok{font-size:12.5px; color:var(--text-muted);}
+
+  .dl-link{
+    display:inline-block; margin-bottom:12px; padding:8px 16px; background:var(--accent); color:#fff;
+    text-decoration:none; border-radius:8px; font-size:13px; font-weight:700;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav><a href="/">← 홈으로</a><h1>통합 생성</h1></nav>
+  <p class="sub">지문 하나로 지문분석 · 워크북 · O/X · 목표어법 문제를 한 번에 만들어요.</p>
+
+  <div id="gate" class="gate">로그인이 필요해요. <a href="/">홈으로 가서 로그인하기</a></div>
+
+  <div id="content" style="display:none;">
+    <textarea id="passageInput" placeholder="영어 지문을 붙여넣으세요."></textarea>
+    <div class="row">
+      <input type="text" id="targetGrammar" placeholder="목표 어법 (선택, 예: 분사구문)">
+      <input type="text" id="titleInput" placeholder="자료 제목 (선택)">
+      <button class="btn" id="genBtn">전체 자료 만들기</button>
+    </div>
+    <div class="loading" id="loadingMsg" style="display:none;">Gemini가 4가지 자료를 동시에 만드는 중이에요... (지문 길이에 따라 1~2분 걸려요)</div>
+    <div class="msg" id="errorMsg"></div>
+    <div class="status-row" id="statusRow"></div>
+
+    <div id="resultArea" style="display:none;">
+      <div class="step-tabs">
+        <div class="step-tab active" data-panel="analysis">지문분석</div>
+        <div class="step-tab" data-panel="workbook">워크북</div>
+        <div class="step-tab" data-panel="ox">O/X</div>
+        <div class="step-tab" data-panel="grammar_quiz">목표어법 문제</div>
+        <div class="step-tab" data-panel="vocab">단어 (체크박스)</div>
+      </div>
+      <div class="step-panel active" id="panel-analysis"></div>
+      <div class="step-panel" id="panel-workbook"></div>
+      <div class="step-panel" id="panel-ox"></div>
+      <div class="step-panel" id="panel-grammar_quiz"></div>
+      <div class="step-panel" id="panel-vocab"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let materialIds = {};
+let vocabWords = [];
+
+async function checkAuth(){
+  const res = await fetch('/auth/me', {credentials:'include'});
+  if(res.ok){
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+  }
+}
+checkAuth();
+
+document.querySelectorAll('.step-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.step-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+  };
+});
+
+document.getElementById('genBtn').onclick = async () => {
+  const passage_text = document.getElementById('passageInput').value.trim();
+  const target_grammar = document.getElementById('targetGrammar').value.trim() || null;
+  const title = document.getElementById('titleInput').value.trim() || null;
+  const errorMsg = document.getElementById('errorMsg');
+  const loading = document.getElementById('loadingMsg');
+  const statusRow = document.getElementById('statusRow');
+  errorMsg.textContent = '';
+  statusRow.innerHTML = '';
+  if(!passage_text){ errorMsg.textContent = '지문을 입력해주세요.'; return; }
+
+  document.getElementById('genBtn').disabled = true;
+  loading.style.display = 'block';
+  document.getElementById('resultArea').style.display = 'none';
+
+  try{
+    const res = await fetch('/api/generate-all', {
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+      body: JSON.stringify({passage_text, target_grammar, title})
+    });
+    if(!res.ok){ throw new Error((await res.json()).detail || '생성에 실패했어요.'); }
+    const data = await res.json();
+
+    const labels = {analysis:'지문분석', workbook:'워크북', ox:'O/X', grammar_quiz:'목표어법 문제'};
+    Object.keys(labels).forEach(key => {
+      const chip = document.createElement('span');
+      if(data.materials[key]){
+        chip.className = 'status-chip done';
+        chip.textContent = `${labels[key]} 완료`;
+      } else {
+        chip.className = 'status-chip error';
+        chip.textContent = `${labels[key]} 실패: ${data.errors[key] || '오류'}`;
+      }
+      statusRow.appendChild(chip);
+    });
+
+    renderAll(data.materials);
+    document.getElementById('resultArea').style.display = 'block';
+  }catch(e){
+    errorMsg.textContent = e.message;
+  }finally{
+    loading.style.display = 'none';
+    document.getElementById('genBtn').disabled = false;
+  }
+};
+
+function dlButton(materialId){
+  return `<a class="dl-link" href="/api/materials/${materialId}/pdf">PDF 다운로드</a>`;
+}
+
+function renderAll(materials){
+  materialIds = {};
+  if(materials.analysis) { materialIds.analysis = materials.analysis.material_id; renderAnalysis(materials.analysis.result, materials.analysis.material_id); }
+  if(materials.workbook) { materialIds.workbook = materials.workbook.material_id; renderWorkbook(materials.workbook.result, materials.workbook.material_id); }
+  if(materials.ox) { materialIds.ox = materials.ox.material_id; renderOx(materials.ox.result, materials.ox.material_id); }
+  if(materials.grammar_quiz) { renderGrammarQuiz(materials.grammar_quiz.result, materials.grammar_quiz.material_id); }
+
+  vocabWords = (materials.analysis && materials.analysis.result.vocabulary) || [];
+  renderVocabCheckboxes(vocabWords);
+}
+
+function renderAnalysis(result, materialId){
+  const box = document.getElementById('panel-analysis');
+  let html = dlButton(materialId);
+  if(result.summary){
+    html += `<div class="summary-box"><h3 style="margin:0 0 6px;">지문 요약</h3>
+      <p><strong>주제:</strong> ${result.summary.theme||''}</p>
+      <p><strong>흐름:</strong> ${result.summary.flow||''}</p>
+      <p>${result.summary.background||''}</p></div>`;
+  }
+  (result.sentences||[]).forEach(sent => {
+    const badge = sent.badge ? `<span class="badge">${sent.badge}</span>` : '';
+    const enText = (sent.tokens||[]).map(t=>t.text).join(' ');
+    const notes = (sent.notes||[]).map(n=>`· ${n.text||n.content||''}`).join('<br>');
+    html += `<div class="sentence-block">${badge}<div class="en">[${sent.num}] ${enText}</div>
+      <div class="ko">${sent.translation||''}</div><div class="notes">${notes}</div></div>`;
+  });
+  box.innerHTML = html;
+}
+
+function renderWorkbook(result, materialId){
+  const box = document.getElementById('panel-workbook');
+  let html = dlButton(materialId);
+  html += '<h4>1단계 - 해석</h4>';
+  (result.step1||[]).forEach(s => html += `<div class="block">[${s.num}] ${s.en}<div class="ko" style="color:var(--text-muted); font-size:13px; margin-top:4px;">${s.ko}</div></div>`);
+  html += '<h4>2단계 - 빈칸</h4>';
+  (result.step2||[]).forEach(s => html += `<div class="block">[${s.num}] ${s.blanked_en}<div class="hint">힌트: ${s.hint}</div></div>`);
+  html += '<h4>3단계 - 순서</h4>';
+  (result.step3||[]).forEach(s => html += `<div class="block"><strong>문단 ${s.paragraph}</strong><br>${(s.sentences||[]).map((x,i)=>`${i+1}. ${x}`).join('<br>')}</div>`);
+  html += '<h4>4단계 - 언스크램블</h4>';
+  (result.step4||[]).forEach(s => html += `<div class="block">[${s.num}] ${(s.chunks||[]).join(' / ')}</div>`);
+  box.innerHTML = html;
+}
+
+function renderOx(result, materialId){
+  const box = document.getElementById('panel-ox');
+  let html = dlButton(materialId);
+  html += '<h4>한글 O/X</h4>';
+  (result.korean_ox||[]).forEach(it => html += `<div class="block">[${it.num}] ${it.statement} <strong>(${it.answer?'O':'X'})</strong></div>`);
+  html += '<h4>영어 O/X</h4>';
+  (result.english_ox||[]).forEach(it => html += `<div class="block">[${it.num}] ${it.statement} <strong>(${it.answer?'O':'X'})</strong></div>`);
+  box.innerHTML = html;
+}
+
+const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧'];
+
+function renderGrammarQuiz(result, materialId){
+  const box = document.getElementById('panel-grammar_quiz');
+  let html = '';
+  if(materialId){
+    html += `<a class="dl-link" href="/api/materials/${materialId}/docx" style="background:var(--text); margin-right:8px;">워드 다운로드 (편집 가능)</a>`;
+  }
+  html += `<p class="hint" style="margin:8px 0 14px;">목표 어법: ${result.target_grammar||''}</p>`;
+
+  (result.questions||[]).forEach(q => {
+    let body = '';
+    if(q.type === 'choice_parens' || q.type === 'fill_blank_choice'){
+      const choiceLine = (q.choices||[]).map((c,i)=>`${CIRCLED[i]} ${c}`).join('&nbsp;&nbsp;&nbsp;');
+      body = `<div class="sentence-block" style="margin-bottom:6px;">${q.sentence}</div><div style="margin-bottom:10px;">${choiceLine}</div>
+        <div class="hint">정답: ${CIRCLED[q.answer_index??0]}</div>`;
+    } else if(q.type === 'choose_sentence'){
+      const lines = (q.choices||[]).map((c,i)=>`<div>${CIRCLED[i]} ${c}</div>`).join('');
+      body = `<div style="margin-bottom:10px;">${lines}</div><div class="hint">정답: ${CIRCLED[q.answer_index??0]}</div>`;
+    } else if(q.type === 'order_words'){
+      body = `<div class="hint" style="margin-bottom:6px;">${q.korean_hint||''}</div>
+        <div class="sentence-block" style="margin-bottom:6px;">${(q.words||[]).join(' / ')}</div>
+        <div class="hint">정답: ${q.answer||''}</div>`;
+    } else if(q.type === 'rewrite'){
+      body = `<div class="sentence-block" style="margin-bottom:6px;">${q.sentence||''}</div>
+        <div class="hint">정답: ${q.answer||''}</div>`;
+    }
+    html += `<div class="block" style="margin-bottom:14px;">
+      <span class="badge">${q.tag||''}</span>
+      <div style="font-weight:700; margin:4px 0 8px;">${q.num}. ${q.instruction||''}</div>
+      ${body}
+    </div>`;
+  });
+  box.innerHTML = html;
+}
+
+function renderVocabCheckboxes(words){
+  const box = document.getElementById('panel-vocab');
+  if(!words.length){ box.innerHTML = '<p class="hint">추출된 단어가 없어요.</p>'; return; }
+  let html = '<div class="voca-list">';
+  words.forEach((w, i) => {
+    html += `<label class="voca-row">
+      <input type="checkbox" class="voca-check" data-idx="${i}" checked>
+      <strong>${w.word}</strong> <span class="meaning">${w.meaning||''}</span>
+    </label>`;
+  });
+  html += '</div>';
+  html += `<div class="voca-actions">
+    <input type="text" id="wordListName" placeholder="담을 단어장 이름 (새로 생성됨)" value="${(document.getElementById('titleInput').value.trim() || '지문') + ' 단어'}">
+    <button class="btn small" id="addToWordListBtn">체크한 단어 단어장에 추가</button>
+    <span class="ok" id="wordListMsg"></span>
+  </div>`;
+  box.innerHTML = html;
+
+  document.getElementById('addToWordListBtn').onclick = addCheckedWordsToList;
+}
+
+async function addCheckedWordsToList(){
+  const checked = Array.from(document.querySelectorAll('.voca-check:checked')).map(c => vocabWords[c.dataset.idx]);
+  const msg = document.getElementById('wordListMsg');
+  if(!checked.length){ msg.textContent = '선택된 단어가 없어요.'; return; }
+
+  const listName = document.getElementById('wordListName').value.trim() || '지문 단어';
+  msg.textContent = '추가 중...';
+  try{
+    const listRes = await fetch('/api/word-lists', {
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+      body: JSON.stringify({title: listName})
+    });
+    if(!listRes.ok) throw new Error((await listRes.json()).detail);
+    const list = await listRes.json();
+
+    for(const w of checked){
+      await fetch(`/api/word-lists/${list.id}/words`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+        body: JSON.stringify({english: w.word, korean: w.meaning, example: null})
+      });
+    }
+    msg.textContent = `"${listName}" 단어장에 ${checked.length}개 추가 완료!`;
+  }catch(e){
+    msg.textContent = '실패: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>
