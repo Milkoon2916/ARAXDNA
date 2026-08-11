@@ -100,14 +100,7 @@
           <form id="signupForm" class="tab-panel" style="display:none;">
             <div class="field"><label>이름</label><input type="text" name="name" required></div>
             <div class="field"><label>PIN</label><input type="password" name="pin" required></div>
-            <div class="field">
-              <label>Gemini API 키</label>
-              <input type="text" name="gemini_api_key" placeholder="AIza로 시작" required>
-              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
-                 style="display:inline-block; margin-top:5px; font-size:11.5px; color:var(--accent); text-decoration:none;">
-                키가 없으신가요? Google AI Studio에서 무료로 발급받기 →
-              </a>
-            </div>
+            <div class="field"><label>Gemini API 키</label><input type="text" name="gemini_api_key" placeholder="AIza로 시작" required></div>
             <button type="submit" class="btn-primary">가입하고 시작하기</button>
             <div class="form-msg" id="signupMsg"></div>
           </form>
@@ -115,27 +108,8 @@
 
         <div class="state-loggedin">
           <p class="loggedin-name" id="teacherName"></p>
-          <p class="loggedin-sub">로그인됨 · 모델: <span id="currentModel">-</span></p>
-          <button class="btn-secondary" id="settingsToggleBtn" style="margin-bottom:8px;">설정 (모델/키 변경)</button>
+          <p class="loggedin-sub">로그인됨</p>
           <button class="btn-secondary" id="logoutBtn">로그아웃</button>
-
-          <div id="settingsPanel" style="display:none; margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
-            <div class="field">
-              <label>Gemini 모델</label>
-              <select name="gemini_model" id="settingsModel" style="width:100%; padding:9px 10px; border:1px solid var(--border-strong); border-radius:6px; font-family:var(--font-body); font-size:14px; background:var(--bg);">
-                <option value="gemini-3.5-flash">gemini-3.5-flash (기본, 빠르고 저렴)</option>
-                <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (더 저렴, 간단한 작업용)</option>
-                <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (고성능)</option>
-                <option value="gemini-2.5-flash">gemini-2.5-flash (구버전, 안정적)</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Gemini API 키 (바꿀 때만 입력)</label>
-              <input type="text" id="settingsKey" placeholder="비워두면 기존 키 유지">
-            </div>
-            <button type="button" class="btn-primary" id="settingsSaveBtn">저장</button>
-            <div class="form-msg" id="settingsMsg"></div>
-          </div>
         </div>
       </div>
     </header>
@@ -166,13 +140,6 @@
         <span class="tag">웹 워크북</span>
         <h2>O/X 리딩 워크북</h2>
         <p>지문을 넣으면 한글 O/X 10문항, 영어 O/X 5문항짜리 내용일치 문제가 만들어져요.</p>
-        <span class="go">만들러 가기 →</span>
-      </a>
-
-      <a class="card" href="/grammar/">
-        <span class="tag">워드 다운로드</span>
-        <h2>어법 문제 만들기</h2>
-        <p>지문을 넣으면 단원 태그가 붙은 문법 테스트가 만들어지고, 편집 가능한 워드로 받을 수 있어요.</p>
         <span class="go">만들러 가기 →</span>
       </a>
 
@@ -209,49 +176,12 @@
       if(res.ok){
         const data = await res.json();
         document.getElementById('teacherName').textContent = data.name + ' 선생님';
-        document.getElementById('currentModel').textContent = data.gemini_model || '-';
-        const modelSelect = document.getElementById('settingsModel');
-        if(modelSelect && data.gemini_model){
-          const hasOption = Array.from(modelSelect.options).some(o => o.value === data.gemini_model);
-          if(!hasOption){
-            const opt = document.createElement('option');
-            opt.value = data.gemini_model; opt.textContent = data.gemini_model + ' (현재 저장된 값)';
-            modelSelect.appendChild(opt);
-          }
-          modelSelect.value = data.gemini_model;
-        }
         accountBox.classList.remove('is-loggedout');
         accountBox.classList.add('is-loggedin');
       }
     }catch(e){ /* 비로그인 상태로 둠 */ }
   }
   checkSession();
-
-  document.getElementById('settingsToggleBtn')?.addEventListener('click', () => {
-    const panel = document.getElementById('settingsPanel');
-    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-  });
-
-  document.getElementById('settingsSaveBtn')?.addEventListener('click', async () => {
-    const msg = document.getElementById('settingsMsg');
-    msg.textContent = '저장 중...';
-    const gemini_model = document.getElementById('settingsModel').value;
-    const keyInput = document.getElementById('settingsKey').value.trim();
-    const body = { gemini_model };
-    if(keyInput) body.gemini_api_key = keyInput;
-    const res = await fetch('/auth/me/gemini', {
-      method:'PUT', headers:{'Content-Type':'application/json'},
-      credentials:'include', body: JSON.stringify(body)
-    });
-    if(res.ok){
-      msg.textContent = '저장했어요!';
-      document.getElementById('settingsKey').value = '';
-      checkSession();
-    } else {
-      const err = await res.json().catch(()=>({}));
-      msg.textContent = err.detail || '저장에 실패했어요.';
-    }
-  });
 
   loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();

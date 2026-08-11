@@ -59,11 +59,6 @@ def workbook_page():
 def comprehension_page():
     return FileResponse("static/comprehension.html")
 
-
-@app.get("/grammar/")
-def grammar_page():
-    return FileResponse("static/grammar.html")
-
 # 이후 여기에 기존 워크북/지문분석/OX 라우터, 그리고 새로 옮길 단어장 라우터를
 # 각각 Depends(get_current_teacher_id)로 보호해서 include_router 하면 됨.
 # 학생용 라우트(/quiz/{access_code} 등)는 별도 라우터로 분리해서 인증 없이 공개.

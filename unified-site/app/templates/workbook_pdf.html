@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<style>
+  @font-face{
+    font-family:"Nanum Gothic";
+    src: url("{{ font_regular }}");
+    font-weight: 400;
+  }
+  @font-face{
+    font-family:"Nanum Gothic";
+    src: url("{{ font_bold }}");
+    font-weight: 700;
+  }
+
+  @page{
+    size: A4;
+    margin: 16mm 16mm 14mm;
+    @bottom-center{ content: counter(page) " / " counter(pages); font-family:"Nanum Gothic"; font-size:9px; color:#9A9A94; }
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    font-family:"Nanum Gothic", sans-serif; color:#1F1F1D; font-size:11.5px; line-height:1.7;
+    background:#FFFFFF; margin:0;
+  }
+
+  .step-page{ page-break-after: always; }
+  .step-page:last-child{ page-break-after: auto; }
+
+  .step-header{
+    display:flex; align-items:center; gap:10px; margin-bottom:14px; padding-bottom:8px;
+    border-bottom:2px solid #3F4643;
+  }
+  .step-badge{
+    background:#3F4643; color:#fff; font-size:11px; font-weight:700; padding:5px 12px; border-radius:14px;
+  }
+  .step-title-text{font-size:13px; font-weight:700;}
+  .step-doc-title{font-size:10px; color:#6B6B66; margin-left:auto;}
+
+  .instruction{font-size:11px; color:#3F4643; font-weight:700; margin-bottom:12px;}
+
+  .unit-box{
+    border:1px solid #C9C9C4; border-style:dashed; border-radius:6px; padding:12px 14px;
+    margin-bottom:14px; page-break-inside:avoid; background:#FAFAF8;
+  }
+  .unit-num{color:#6B6B66; font-weight:700; margin-right:4px;}
+  .en-line{margin-bottom:2px;}
+  .ko-line{margin-bottom:2px; color:#3F4643;}
+
+  .blank-lines{margin-top:10px;}
+  .blank-line{border-bottom:1px solid #B8B8B3; height:16px; margin-bottom:8px;}
+
+  .word-order-box{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .word-chip{ border:1px solid #C9C9C4; border-radius:5px; padding:3px 9px; font-size:11px; }
+
+  .flawed-passage{ border:1px solid #C9C9C4; border-radius:6px; padding:14px; margin-bottom:16px; background:#FAFAF8; }
+  .flawed-passage .underline-item{ text-decoration:underline; text-decoration-color:#3F4643; font-weight:700; }
+  .answer-line{ display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:10.5px; }
+  .answer-line .field{ flex:1; border-bottom:1px solid #B8B8B3; height:14px; }
+
+  .order-passage-box{ border:1px solid #1F1F1D; border-radius:4px; padding:14px; margin-bottom:14px; }
+  .order-chunk{ margin-bottom:10px; }
+  .order-chunk .label{ font-weight:700; margin-right:6px; }
+
+  .writing-hint-bar{ background:#EEEFEC; color:#3F4643; font-size:10.5px; text-align:center; padding:5px; margin:8px 0 6px; border-radius:4px; }
+</style>
+</head>
+<body>
+
+{% if 'step1' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 1</span>
+    <span class="step-title-text">지문 연습하기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">영문과 해석을 읽고 문장의 의미를 이해해 보세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="en-line">{{ u.num }}. {{ u.en }}</div>
+    <div class="ko-line">{{ u.ko }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step2' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 2</span>
+    <span class="step-title-text">빈칸 완성하기 (우리말)</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">영문을 보고 우리말 해석의 빈칸을 완성해 보세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="en-line">{{ u.num }}. {{ u.en }}</div>
+    <div class="ko-line">{{ u.ko_blanked }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step3' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 3</span>
+    <span class="step-title-text">빈칸 완성하기 (영문)</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">우리말 해석을 보고 영문의 빈칸을 완성해 보세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="ko-line">{{ u.num }}. {{ u.ko }}</div>
+    <div class="en-line">{{ u.en_blanked }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step4' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 4</span>
+    <span class="step-title-text">해석 연습하기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">문장 전체의 자연스러운 해석을 써 보세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="en-line">{{ u.num }}. {{ u.en }}</div>
+    <div class="blank-lines"><div class="blank-line"></div><div class="blank-line"></div></div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step5' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 5</span>
+    <span class="step-title-text">동사형 연습하기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">괄호 안에 주어진 단어를 알맞게 고쳐 쓰세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="ko-line">{{ u.num }}. {{ u.ko }}</div>
+    <div class="en-line">{{ u.verb_prompt_en }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step6' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 6</span>
+    <span class="step-title-text">어법·어휘 고르기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">괄호 안에서 옳은 어법과 어휘를 골라 보세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="ko-line">{{ u.num }}. {{ u.ko }}</div>
+    <div class="en-line">{{ u.choice_prompt_en }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step7' in steps and result.flawed_text %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 7</span>
+    <span class="step-title-text">어색한 곳 찾기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">밑줄 친 부분 중 어법상 어색한 것을 찾아 알맞게 고쳐 쓰세요.</div>
+  <div class="flawed-passage">
+    {% for item in result.flawed_text.underlined_items %}<span class="underline-item">{{ item.text }}</span>{% if not loop.last %} {% endif %}{% endfor %}
+  </div>
+  {% for item in result.flawed_text.underlined_items if item.is_wrong %}
+  <div class="answer-line">({{ loop.index }}) <span class="field"></span> → <span class="field"></span></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step8' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 8</span>
+    <span class="step-title-text">순서 배열하기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">단어를 배열하여 문장을 완성해 보세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="ko-line">{{ u.num }}. {{ u.ko }}</div>
+    <div class="word-order-box">
+      {% for w in u.word_order_words %}<span class="word-chip">{{ w }}</span>{% endfor %}
+    </div>
+    <div class="blank-line"></div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if 'step9' in steps and result.paragraph_order %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 9</span>
+    <span class="step-title-text">문단 배열하기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">다음 문단을 흐름상 알맞게 배열해 보세요.</div>
+  <div class="order-passage-box">
+    <div class="en-line" style="margin-bottom:10px;">{{ result.paragraph_order.intro_en }}</div>
+    {% for c in result.paragraph_order.chunks %}
+    <div class="order-chunk"><span class="label">({{ c.label }})</span>{{ c.text }}</div>
+    {% endfor %}
+  </div>
+  <div class="answer-line">
+    {% for c in result.paragraph_order.chunks %}<span class="field" style="flex:0 0 60px; text-align:center;"></span>{% if not loop.last %}→{% endif %}{% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if 'step10' in steps %}
+<div class="step-page">
+  <div class="step-header">
+    <span class="step-badge">STEP 10</span>
+    <span class="step-title-text">영작 연습하기</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <div class="instruction">우리말과 같은 뜻이 되도록 주어진 단어를 순서대로 사용하여 영작하세요.</div>
+  {% for u in result.units %}
+  <div class="unit-box">
+    <div class="ko-line">{{ u.num }}. {{ u.ko }}</div>
+    <div class="writing-hint-bar">{{ u.given_words_for_writing | join(', ') }}</div>
+    <div class="blank-lines"><div class="blank-line"></div><div class="blank-line"></div></div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+</body>
+</html>
