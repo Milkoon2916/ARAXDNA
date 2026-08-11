@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 FONTS_DIR = BASE_DIR / "assets" / "fonts"
 
-env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
 
 FONT_REGULAR = (FONTS_DIR / "NanumGothic.ttf").as_uri()
 FONT_BOLD = (FONTS_DIR / "NanumGothicBold.ttf").as_uri()
@@ -24,9 +24,10 @@ def render_analysis_pdf(result: dict, title: str | None = None) -> bytes:
     return HTML(string=html_str, base_url=str(BASE_DIR)).write_pdf()
 
 
-def render_workbook_pdf(result: dict, title: str | None = None) -> bytes:
+def render_workbook_pdf(result: dict, title: str | None = None, steps: list[str] | None = None) -> bytes:
     template = env.get_template("workbook_pdf.html")
-    html_str = template.render(result=result, title=title, font_regular=FONT_REGULAR, font_bold=FONT_BOLD)
+    steps = steps or ["step1", "step2", "step3", "step4", "step5", "step6", "step7", "step8", "step9", "step10"]
+    html_str = template.render(result=result, title=title, steps=steps, font_regular=FONT_REGULAR, font_bold=FONT_BOLD)
     return HTML(string=html_str, base_url=str(BASE_DIR)).write_pdf()
 
 

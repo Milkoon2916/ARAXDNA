@@ -8,7 +8,7 @@
 <style>
   *{box-sizing:border-box;}
   body{margin:0; padding:0 20px 80px;}
-  .wrap{max-width:900px; margin:0 auto;}
+  .wrap{max-width:920px; margin:0 auto;}
   nav{padding:24px 0; display:flex; align-items:center; gap:16px;}
   nav a{color:var(--text-muted); text-decoration:none; font-size:13px;}
   nav h1{font-size:20px; font-weight:800; margin:0;}
@@ -20,7 +20,20 @@
     width:100%; min-height:180px; padding:14px; border:1px solid var(--border-strong); border-radius:10px;
     font-family:var(--font-body); font-size:14px; background:var(--surface); color:var(--text); resize:vertical;
   }
-  .row{display:flex; gap:10px; margin-top:10px;}
+
+  .steps-picker{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-top:12px;
+  }
+  .steps-picker .picker-title{font-size:13px; font-weight:700; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;}
+  .steps-picker .picker-title button{
+    background:none; border:none; color:var(--text-muted); font-size:12px; cursor:pointer; text-decoration:underline;
+    font-family:var(--font-body);
+  }
+  .steps-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:8px;}
+  .step-check{display:flex; align-items:center; gap:7px; font-size:13px; padding:6px 8px; border-radius:6px; background:var(--bg);}
+  .step-check input{accent-color:var(--accent);}
+
+  .row{display:flex; gap:10px; margin-top:12px;}
   button.btn{
     padding:11px 22px; background:var(--accent); color:#fff; border:none; border-radius:8px;
     font-family:var(--font-body); font-size:14.5px; font-weight:700; cursor:pointer;
@@ -29,15 +42,28 @@
   .msg{font-size:13.5px; color:var(--danger); margin-top:10px;}
   .loading{font-size:13.5px; color:var(--text-muted); margin-top:10px;}
 
-  .step-tabs{display:flex; gap:8px; margin:24px 0 16px;}
+  .step-tabs{display:flex; gap:8px; margin:24px 0 16px; flex-wrap:wrap;}
   .step-tab{padding:8px 14px; border:1px solid var(--border); background:var(--surface); border-radius:8px; font-size:13px; cursor:pointer;}
   .step-tab.active{background:var(--accent); color:#fff; border-color:var(--accent);}
   .step-panel{display:none;}
   .step-panel.active{display:block;}
 
-  .block{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:10px; font-size:14px; line-height:1.7;}
-  .block .ko{color:var(--text-muted); font-size:13px; margin-top:4px;}
+  .unit-block{background:var(--surface); border:1px dashed var(--border-strong); border-radius:10px; padding:14px 16px; margin-bottom:10px; font-size:14px; line-height:1.7;}
+  .unit-block .ko{color:var(--text-muted); font-size:13px; margin-top:4px;}
   .hint{font-size:12px; color:var(--text-faint); margin-top:6px;}
+  .instruction{font-size:13px; font-weight:700; color:var(--accent); margin-bottom:12px;}
+
+  .word-chip{display:inline-block; border:1px solid var(--border-strong); border-radius:5px; padding:3px 9px; font-size:12.5px; margin:2px 4px 2px 0;}
+  .flawed-box{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:14px; line-height:2;}
+  .flawed-box .u{text-decoration:underline; font-weight:700;}
+  .order-box{background:var(--surface); border:1px solid var(--text); border-radius:10px; padding:16px; margin-bottom:12px;}
+  .order-box .chunk{margin-bottom:8px;}
+  .writing-hint{background:var(--accent-soft); color:var(--text); font-size:12.5px; padding:5px 10px; border-radius:6px; display:inline-block; margin:6px 0;}
+
+  .dl-link{
+    display:inline-block; margin-bottom:12px; padding:9px 18px; background:var(--text); color:#fff;
+    text-decoration:none; border-radius:8px; font-size:13px; font-weight:700;
+  }
 </style>
 </head>
 <body>
@@ -48,26 +74,45 @@
 
   <div id="content" style="display:none;">
     <textarea id="passageInput" placeholder="영어 지문을 붙여넣으세요."></textarea>
+
+    <div class="steps-picker">
+      <div class="picker-title">
+        <span>만들 단계 선택</span>
+        <span><button id="selectAllBtn" type="button">전체 선택</button> · <button id="selectNoneBtn" type="button">전체 해제</button></span>
+      </div>
+      <div class="steps-grid" id="stepsGrid"></div>
+    </div>
+
     <div class="row"><button class="btn" id="genBtn">워크북 만들기</button></div>
     <div class="loading" id="loadingMsg" style="display:none;">Gemini가 워크북을 만드는 중이에요...</div>
     <div class="msg" id="errorMsg"></div>
 
     <div id="resultArea" style="display:none;">
-      <div class="step-tabs">
-        <div class="step-tab active" data-step="step1">1단계 해석</div>
-        <div class="step-tab" data-step="step2">2단계 빈칸</div>
-        <div class="step-tab" data-step="step3">3단계 순서</div>
-        <div class="step-tab" data-step="step4">4단계 언스크램블</div>
-      </div>
-      <div class="step-panel active" id="panel-step1"></div>
-      <div class="step-panel" id="panel-step2"></div>
-      <div class="step-panel" id="panel-step3"></div>
-      <div class="step-panel" id="panel-step4"></div>
+      <div class="step-tabs" id="stepTabs"></div>
+      <div id="stepPanels"></div>
     </div>
   </div>
 </div>
 
 <script>
+const STEP_LABELS = {
+  step1: "1. 지문 연습하기", step2: "2. 빈칸(우리말)", step3: "3. 빈칸(영문)",
+  step4: "4. 해석 연습하기", step5: "5. 동사형 연습하기", step6: "6. 어법·어휘 고르기",
+  step7: "7. 어색한 곳 찾기", step8: "8. 순서 배열하기", step9: "9. 문단 배열하기",
+  step10: "10. 영작 연습하기",
+};
+const ALL_STEPS = Object.keys(STEP_LABELS);
+
+const grid = document.getElementById('stepsGrid');
+ALL_STEPS.forEach(s => {
+  const label = document.createElement('label');
+  label.className = 'step-check';
+  label.innerHTML = `<input type="checkbox" class="step-cb" value="${s}" checked> ${STEP_LABELS[s]}`;
+  grid.appendChild(label);
+});
+document.getElementById('selectAllBtn').onclick = () => document.querySelectorAll('.step-cb').forEach(c => c.checked = true);
+document.getElementById('selectNoneBtn').onclick = () => document.querySelectorAll('.step-cb').forEach(c => c.checked = false);
+
 async function checkAuth(){
   const res = await fetch('/auth/me', {credentials:'include'});
   if(res.ok){
@@ -77,21 +122,14 @@ async function checkAuth(){
 }
 checkAuth();
 
-document.querySelectorAll('.step-tab').forEach(tab => {
-  tab.onclick = () => {
-    document.querySelectorAll('.step-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('panel-' + tab.dataset.step).classList.add('active');
-  };
-});
-
 document.getElementById('genBtn').onclick = async () => {
   const passage_text = document.getElementById('passageInput').value.trim();
+  const workbook_steps = Array.from(document.querySelectorAll('.step-cb:checked')).map(c => c.value);
   const errorMsg = document.getElementById('errorMsg');
   const loading = document.getElementById('loadingMsg');
   errorMsg.textContent = '';
   if(!passage_text){ errorMsg.textContent = '지문을 입력해주세요.'; return; }
+  if(!workbook_steps.length){ errorMsg.textContent = '만들 단계를 하나 이상 선택해주세요.'; return; }
 
   document.getElementById('genBtn').disabled = true;
   loading.style.display = 'block';
@@ -100,11 +138,11 @@ document.getElementById('genBtn').onclick = async () => {
   try{
     const res = await fetch('/api/workbook', {
       method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
-      body: JSON.stringify({passage_text})
+      body: JSON.stringify({passage_text, workbook_steps})
     });
     if(!res.ok){ throw new Error((await res.json()).detail || '생성에 실패했어요.'); }
     const data = await res.json();
-    render(data.result, data.material_id);
+    render(data.result, data.material_id, workbook_steps);
     document.getElementById('resultArea').style.display = 'block';
   }catch(e){
     errorMsg.textContent = e.message;
@@ -114,29 +152,92 @@ document.getElementById('genBtn').onclick = async () => {
   }
 };
 
-function render(result, materialId){
+function render(result, materialId, steps){
+  const tabsBox = document.getElementById('stepTabs');
+  const panelsBox = document.getElementById('stepPanels');
+  tabsBox.innerHTML = '';
+  panelsBox.innerHTML = '';
+
   if(materialId){
-    let dl = document.getElementById('pdfDownloadLink');
-    if(!dl){
-      dl = document.createElement('a');
-      dl.id = 'pdfDownloadLink';
-      dl.style.cssText = 'display:inline-block; margin-top:16px; padding:9px 18px; background:var(--accent); color:#fff; text-decoration:none; border-radius:8px; font-size:13.5px; font-weight:700;';
-      document.getElementById('resultArea').prepend(dl);
-    }
+    const dl = document.createElement('a');
+    dl.className = 'dl-link';
     dl.href = `/api/materials/${materialId}/pdf`;
     dl.textContent = 'PDF 다운로드';
+    panelsBox.before(dl);
   }
-  const p1 = document.getElementById('panel-step1');
-  p1.innerHTML = (result.step1 || []).map(s => `<div class="block">[${s.num}] ${s.en}<div class="ko">${s.ko}</div></div>`).join('');
 
-  const p2 = document.getElementById('panel-step2');
-  p2.innerHTML = (result.step2 || []).map(s => `<div class="block">[${s.num}] ${s.blanked_en}<div class="hint">힌트: ${s.hint}</div></div>`).join('');
+  steps.forEach((s, i) => {
+    const tab = document.createElement('div');
+    tab.className = 'step-tab' + (i === 0 ? ' active' : '');
+    tab.textContent = STEP_LABELS[s];
+    tab.onclick = () => {
+      document.querySelectorAll('.step-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + s).classList.add('active');
+    };
+    tabsBox.appendChild(tab);
 
-  const p3 = document.getElementById('panel-step3');
-  p3.innerHTML = (result.step3 || []).map(s => `<div class="block"><strong>문단 ${s.paragraph}</strong><br>${(s.sentences||[]).map((x,i)=>`${i+1}. ${x}`).join('<br>')}</div>`).join('');
+    const panel = document.createElement('div');
+    panel.className = 'step-panel' + (i === 0 ? ' active' : '');
+    panel.id = 'panel-' + s;
+    panel.innerHTML = renderStep(s, result);
+    panelsBox.appendChild(panel);
+  });
+}
 
-  const p4 = document.getElementById('panel-step4');
-  p4.innerHTML = (result.step4 || []).map(s => `<div class="block">[${s.num}] ${(s.chunks||[]).join(' / ')}</div>`).join('');
+function renderStep(step, result){
+  const units = result.units || [];
+  if(step === 'step1'){
+    return '<div class="instruction">영문과 해석을 읽고 문장의 의미를 이해해 보세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.en}<div class="ko">${u.ko}</div></div>`).join('');
+  }
+  if(step === 'step2'){
+    return '<div class="instruction">영문을 보고 우리말 해석의 빈칸을 완성해 보세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.en}<div class="ko">${u.ko_blanked}</div></div>`).join('');
+  }
+  if(step === 'step3'){
+    return '<div class="instruction">우리말 해석을 보고 영문의 빈칸을 완성해 보세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.ko}<div>${u.en_blanked}</div></div>`).join('');
+  }
+  if(step === 'step4'){
+    return '<div class="instruction">문장 전체의 자연스러운 해석을 써 보세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.en}<div class="hint">(직접 해석을 써 보세요)</div></div>`).join('');
+  }
+  if(step === 'step5'){
+    return '<div class="instruction">괄호 안에 주어진 단어를 알맞게 고쳐 쓰세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.ko}<div>${u.verb_prompt_en}</div></div>`).join('');
+  }
+  if(step === 'step6'){
+    return '<div class="instruction">괄호 안에서 옳은 어법과 어휘를 골라 보세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.ko}<div>${u.choice_prompt_en}</div></div>`).join('');
+  }
+  if(step === 'step7'){
+    const ft = result.flawed_text;
+    if(!ft) return '<p class="hint">생성된 데이터가 없어요.</p>';
+    const passage = (ft.underlined_items||[]).map(it => `<span class="u">${it.text}</span>`).join(' ');
+    const wrongCount = (ft.underlined_items||[]).filter(it => it.is_wrong).length;
+    const answerLines = Array.from({length: wrongCount}, (_, i) => `<div class="hint">(${i+1}) ______________ → ______________</div>`).join('');
+    return '<div class="instruction">밑줄 친 부분 중 어법상 어색한 것을 찾아 알맞게 고쳐 쓰세요.</div>' +
+      `<div class="flawed-box">${passage}</div>${answerLines}`;
+  }
+  if(step === 'step8'){
+    return '<div class="instruction">단어를 배열하여 문장을 완성해 보세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.ko}<div>${(u.word_order_words||[]).map(w=>`<span class="word-chip">${w}</span>`).join('')}</div></div>`).join('');
+  }
+  if(step === 'step9'){
+    const po = result.paragraph_order;
+    if(!po) return '<p class="hint">생성된 데이터가 없어요.</p>';
+    const chunks = (po.chunks||[]).map(c => `<div class="chunk">(${c.label}) ${c.text}</div>`).join('');
+    return '<div class="instruction">다음 문단을 흐름상 알맞게 배열해 보세요.</div>' +
+      `<div class="order-box"><div style="margin-bottom:10px;">${po.intro_en}</div>${chunks}</div>
+      <div class="hint">______ → ______ → ______</div>`;
+  }
+  if(step === 'step10'){
+    return '<div class="instruction">우리말과 같은 뜻이 되도록 주어진 단어를 순서대로 사용하여 영작하세요.</div>' +
+      units.map(u => `<div class="unit-block">${u.num}. ${u.ko}<div class="writing-hint">${(u.given_words_for_writing||[]).join(', ')}</div><div class="hint">(직접 영작을 써 보세요)</div></div>`).join('');
+  }
+  return '';
 }
 </script>
 </body>

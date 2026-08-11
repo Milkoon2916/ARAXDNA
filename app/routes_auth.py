@@ -29,7 +29,7 @@ class SignupRequest(BaseModel):
     name: str
     pin: str
     gemini_api_key: str
-    gemini_model: str = "gemini-3-flash"
+    gemini_model: str = "gemini-3.5-flash"
 
 
 class LoginRequest(BaseModel):
@@ -38,7 +38,7 @@ class LoginRequest(BaseModel):
 
 
 class UpdateKeyRequest(BaseModel):
-    gemini_api_key: str
+    gemini_api_key: str | None = None  # 비워두면 기존 키 유지, 모델만 바꿀 수 있음
     gemini_model: str | None = None
 
 
@@ -93,9 +93,12 @@ def update_gemini_key(
     teacher_id: int = Depends(get_current_teacher_id),
     db=Depends(get_db),
 ):
+    encrypted_key = None
+    if body.gemini_api_key:
+        encrypted_key = encrypt_api_key(body.gemini_api_key)
     db.update_teacher_gemini(
         teacher_id,
-        gemini_api_key_encrypted=encrypt_api_key(body.gemini_api_key),
+        gemini_api_key_encrypted=encrypted_key,  # None이면 db.py에서 기존 값 유지
         gemini_model=body.gemini_model,
     )
     return {"ok": True}
