@@ -59,12 +59,46 @@ def build_analysis_prompt() -> str:
     return ANALYSIS_SYSTEM_PROMPT_TEMPLATE.format(schema=json.dumps(schema_json, ensure_ascii=False, indent=2))
 
 
+import re
+
+
+_ABBREVS = {"mr.", "ms.", "mrs.", "dr.", "prof.", "st.", "jr.", "sr.", "e.g.", "i.e.", "vs.", "etc.", "u.s.", "u.k."}
+
+
+def _split_sentences(passage_text: str) -> list[str]:
+    """지문을 문장 단위로 나눔. 마침표/느낌표/물음표 뒤 공백을 기준으로 자르되,
+    'Mr.' 'Dr.' 'e.g.' 같은 흔한 약어 뒤에서 잘못 잘린 경우는 다시 이어붙임
+    (완벽하진 않지만 실사용 지문에선 충분히 정확함)."""
+    text = passage_text.strip()
+    if not text:
+        return []
+
+    marked = re.sub(r'([.!?]+[\"\')\]]?)\s+(?=[A-Z\"\'\(])', r'\1<<<SPLIT>>>', text)
+    raw_parts = marked.split('<<<SPLIT>>>')
+    raw_parts = [p.strip() for p in raw_parts if p.strip()]
+
+    sentences: list[str] = []
+    for part in raw_parts:
+        if sentences:
+            last_word = sentences[-1].split()[-1].lower() if sentences[-1].split() else ""
+            if last_word in _ABBREVS:
+                sentences[-1] = sentences[-1] + " " + part
+                continue
+        sentences.append(part)
+
+    return sentences if sentences else [text]
+
+
 def build_analysis_user_message(passage_text: str, target_grammar: str | None = None) -> str:
     lines = ["다음 지문을 분석해줘:"]
     if target_grammar and target_grammar.strip():
         lines.append(f"목표 어법: {target_grammar.strip()}")
     lines.append("")
-    lines.append(passage_text.strip())
+
+    sentences = _split_sentences(passage_text)
+    for i, s in enumerate(sentences, start=1):
+        lines.append(f"[{i}] {s}")
+
     return "\n".join(lines)
 
 
