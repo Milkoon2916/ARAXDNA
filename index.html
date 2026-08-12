@@ -293,8 +293,8 @@
       <div class="legend-title">산출물 미리보기 — 실제 워크북에 쓰이는 색상 태그 그대로</div>
       <div class="legend-sentence">
         <span class="tag g" data-caption="양보">Although</span> the results were
-        <span class="tag v" data-caption="예비의">preliminary</span>, the findings
-        <span class="tag gv" data-caption="수동태·발표">were announced</span> by the research team.
+        <span class="tag v" data-caption="예비의">preliminary</span>, researchers
+        <span class="tag gv" data-caption="수동태·발표">announced</span> their findings.
       </div>
       <div class="legend-keys">
         <span><i class="dot g"></i>문법 (빨강)</span>
@@ -450,37 +450,7 @@
         .filter(p => p.text)
         .map(p => p.text)
         .join('');
-
-      if (candidate.finishReason === 'MAX_TOKENS') {
-        throw new Error(
-          '지문이 길어서 응답이 도중에 잘렸어요 (토큰 한도 초과). 지문을 좀 더 짧게 나눠서 다시 시도해주세요.'
-        );
-      }
-      if (!rawText.trim()) {
-        throw new Error('Gemini가 빈 응답을 반환했어요. 잠시 후 다시 시도해주세요.');
-      }
-
-      let parsed;
-      try {
-        parsed = JSON.parse(stripCodeFence(rawText));
-      } catch (e) {
-        throw new Error('Gemini 응답을 JSON으로 해석하지 못했어요. 다시 시도해주세요.');
-      }
-
-      // 스키마상 유효해도 내용이 사실상 텅 빈 경우(썸네일 데이터 등)를 걸러서
-      // "성공은 했지만 빈 PDF" 상황을 미리 막는다.
-      const firstPassage = parsed?.passages?.[0];
-      const hasRealSentence = firstPassage?.sentences?.some(s =>
-        (s.translation || '').trim().length > 3
-      );
-      const hasRealVocab = (firstPassage?.vocabulary || []).some(v =>
-        (v.meaning || '').trim().length > 0
-      );
-      if (!hasRealSentence || !hasRealVocab) {
-        throw new Error('분석 결과가 비어있거나 불완전해요 (토큰 한도 문제일 수 있어요). 다시 시도해주세요.');
-      }
-
-      return parsed;
+      return JSON.parse(stripCodeFence(rawText));
     }
 
     btn.addEventListener('click', async () => {

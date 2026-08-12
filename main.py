@@ -20,11 +20,8 @@ if STATIC_DIR.exists():
 OUTPUT_DIR = Path(tempfile.gettempdir()) / "passage-analyzer-outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-MAX_TOKENS = 60000  # Gemini 모델은 "thinking" 토큰과 실제 응답 텍스트가 이 budget을 함께 씀.
-                     # 예전엔 20000이었는데, 지문분석처럼 스키마가 복잡한 JSON을 강제하면
-                     # thinking만으로 20000을 다 써버려서 본문이 거의 빈 채로 "일단 스키마는
-                     # 맞는" 응답이 오는 문제가 있었음 (에러 없이 성공하지만 내용이 빈 PDF로 이어짐).
-                     # 지문이 아주 길면 이 값을 더 올리세요 (Gemini 3.6 Flash 기준 최대 65536).
+MAX_TOKENS = 20000  # Sonnet 5 동기 API 한도는 128K. adaptive thinking이 기본으로 켜져있어
+                     # (thinking + 응답 텍스트가 이 budget을 공유) 지문이 길면 이 값을 더 올리세요.
 
 
 class PromptConfigResponse(BaseModel):
