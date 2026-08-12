@@ -22,7 +22,7 @@ from .prompts import (
     OX_MODEL,
     OX_SYSTEM_PROMPT,
     WORKBOOK_MODEL,
-    WORKBOOK_SYSTEM_PROMPT,
+    build_workbook_system_prompt,
     build_analysis_prompt,
     build_analysis_user_message,
     build_grammar_quiz_user_message,
@@ -78,8 +78,10 @@ async def generate_workbook(
     passage = db.create_passage(teacher_id, body.passage_text, body.title)
 
     user_message = build_workbook_user_message(body.passage_text)
-    result = await call_gemini_json(api_key, model or WORKBOOK_MODEL, WORKBOOK_SYSTEM_PROMPT, user_message)
-    result["_selected_steps"] = body.workbook_steps or ALL_WORKBOOK_STEPS
+    steps_for_prompt = body.workbook_steps or ALL_WORKBOOK_STEPS
+    system_prompt = build_workbook_system_prompt(steps_for_prompt)
+    result = await call_gemini_json(api_key, model or WORKBOOK_MODEL, system_prompt, user_message)
+    result["_selected_steps"] = steps_for_prompt
 
     material = db.create_material(passage.id, "workbook", json.dumps(result, ensure_ascii=False))
     return {"passage_id": passage.id, "material_id": material.id, "result": result}
@@ -133,6 +135,8 @@ async def generate_all(
     api_key, model = await _get_teacher_gemini(teacher_id, db)
     passage = db.create_passage(teacher_id, body.passage_text, body.title)
 
+    workbook_steps = body.workbook_steps or ALL_WORKBOOK_STEPS
+
     calls = {}
     if "analysis" in selected:
         calls["analysis"] = call_gemini_json(
@@ -141,7 +145,7 @@ async def generate_all(
         )
     if "workbook" in selected:
         calls["workbook"] = call_gemini_json(
-            api_key, model or WORKBOOK_MODEL, WORKBOOK_SYSTEM_PROMPT,
+            api_key, model or WORKBOOK_MODEL, build_workbook_system_prompt(workbook_steps),
             build_workbook_user_message(body.passage_text),
         )
     if "ox" in selected:
@@ -160,7 +164,6 @@ async def generate_all(
 
     materials = {}
     errors = {}
-    workbook_steps = body.workbook_steps or ALL_WORKBOOK_STEPS
     for key, res in zip(keys, results):
         if isinstance(res, Exception):
             detail = res.detail if isinstance(res, HTTPException) else str(res)

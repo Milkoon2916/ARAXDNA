@@ -76,6 +76,17 @@ def build_analysis_user_message(passage_text: str, target_grammar: str | None = 
 # 단계마다 스키마를 따로 요청하는 것보다 훨씬 안정적이고, 화면/PDF 쪽에서 선택된
 # 단계만 보여주면 되므로 구현도 단순해짐.
 
+# ---------- 워크북 (레퍼런스 형식 10단계) ----------
+# 10단계 전부: 1지문연습 2빈칸(우리말) 3빈칸(영문) 4해석 5동사형 6어법·어휘고르기
+#              7어색한곳찾기 8순서배열 9문단배열 10영작
+#
+# 중요: 처음엔 "어떤 단계가 선택되든 항상 전체를 다 생성"하는 방식으로 짰었는데,
+# 지문이 조금만 길어져도 매 unit마다 en/ko/ko_blanked/en_blanked/verb_prompt_en/
+# choice_prompt_en/word_order_words/given_words_for_writing 등 원문이 5~6번씩
+# 중복 생성되면서 출력 토큰이 폭증 -> Gemini가 중간에 잘리거나(빈 결과) 응답이
+# 너무 오래 걸려 타임아웃(503)이 나는 문제가 있었음. 그래서 지금은 실제로
+# 선택된 단계에 필요한 필드만 프롬프트에 요청하도록 동적으로 조립함.
+
 WORKBOOK_STEP_LABELS = {
     "step1": "지문 연습하기",
     "step2": "빈칸 완성하기 (우리말)",
@@ -90,64 +101,105 @@ WORKBOOK_STEP_LABELS = {
 }
 ALL_WORKBOOK_STEPS = list(WORKBOOK_STEP_LABELS.keys())
 
-WORKBOOK_SYSTEM_PROMPT = """당신은 한국 고등학교 영어 워크북(학력평가 스타일)을 만드는 전문 튜터입니다.
+# 각 단계가 실제로 필요로 하는 unit 필드. en/ko는 거의 모든 화면에서 라벨로 쓰이므로 항상 포함.
+_STEP_UNIT_FIELDS = {
+    "step1": [],
+    "step2": ["ko_blanked"],
+    "step3": ["en_blanked"],
+    "step4": [],
+    "step5": ["verb_prompt_en"],
+    "step6": ["choice_prompt_en", "choice_answer"],
+    "step7": [],  # flawed_text(전체 지문 단위)로 별도 처리
+    "step8": ["word_order_words", "word_order_answer"],
+    "step9": [],  # paragraph_order(전체 지문 단위)로 별도 처리
+    "step10": ["given_words_for_writing"],
+}
+
+_FIELD_DESCRIPTIONS = {
+    "ko_blanked": '- ko_blanked: ko 번역에서 핵심 어휘·표현 부분을 "_____"로 뚫은 버전',
+    "en_blanked": '- en_blanked: en 원문에서 핵심 어휘·표현 부분을 "_____"로 뚫은 버전',
+    "verb_prompt_en": '- verb_prompt_en: en 원문에서 동사(구)들을 원형으로 바꿔 괄호로 표시한 버전. 예: "will be held" → "(hold)"',
+    "choice_prompt_en": '- choice_prompt_en: en 원문에서 어법·어휘 포인트 1곳을 "[오답 / 정답]" 형식의 대괄호로 바꾼 버전',
+    "choice_answer": "- choice_answer: choice_prompt_en 대괄호의 정답 표현",
+    "word_order_words": "- word_order_words: en 원문을 의미 덩어리(단어 또는 짧은 구) 단위로 섞은 배열. 관사+명사, 전치사구 등은 하나의 조각으로 묶어도 됨",
+    "word_order_answer": "- word_order_answer: word_order_words를 올바르게 배열하면 나오는 원문(en과 동일)",
+    "given_words_for_writing": "- given_words_for_writing: 학생이 영작할 때 참고할 핵심 단어 2~5개 (원형)",
+}
+
+
+def build_workbook_system_prompt(steps: list[str] | None = None) -> str:
+    steps = steps or ALL_WORKBOOK_STEPS
+    steps_set = set(steps)
+
+    needed_fields = []
+    for s in steps:
+        for f in _STEP_UNIT_FIELDS.get(s, []):
+            if f not in needed_fields:
+                needed_fields.append(f)
+
+    field_lines = "\n".join(_FIELD_DESCRIPTIONS[f] for f in needed_fields)
+    field_json_lines = ",\n      ".join(f'"{f}": {"[...]" if "words" in f else "..."}' for f in needed_fields)
+
+    extra_sections = []
+    extra_json_keys = []
+
+    if "step7" in steps_set:
+        extra_sections.append(
+            "## 어색한 곳 찾기 (flawed_text) — unit과 별개로 지문 전체 대상 1개만 생성\n"
+            "전체 지문(모든 unit의 en을 이어붙인 것)에서 밑줄 후보 문구를 5~7개 골라 underlined_items 배열로 제시.\n"
+            "그중 정확히 3개는 어법상 틀리게 만들고(is_wrong: true, correction에 올바른 표현), 나머지는 원문 그대로 맞는\n"
+            "문구(is_wrong: false, correction 생략). 배열 순서는 지문에 등장하는 순서와 같아야 함."
+        )
+        extra_json_keys.append(
+            '"flawed_text": {\n'
+            '    "underlined_items": [\n'
+            '      {"text": "...", "is_wrong": true, "correction": "..."},\n'
+            '      {"text": "...", "is_wrong": false}\n'
+            "    ]\n"
+            "  }"
+        )
+
+    if "step9" in steps_set:
+        extra_sections.append(
+            "## 문단 배열하기 (paragraph_order) — 지문 전체 대상 1개만 생성\n"
+            "지문의 도입부(intro_en, 1~2문장)를 고정하고, 나머지를 3~4개 문단(chunk)으로 나눠 A, B, C(, D) 라벨을 붙임.\n"
+            "chunks 배열은 뒤섞인 순서로 제시하고, correct_order에 올바른 라벨 순서를 배열로 제시."
+        )
+        extra_json_keys.append(
+            '"paragraph_order": {\n'
+            '    "intro_en": "...",\n'
+            '    "chunks": [{"label": "A", "text": "..."}, {"label": "B", "text": "..."}],\n'
+            '    "correct_order": ["B", "A"]\n'
+            "  }"
+        )
+
+    extra_sections_text = ("\n\n" + "\n\n".join(extra_sections)) if extra_sections else ""
+    extra_json_text = (",\n  " + ",\n  ".join(extra_json_keys)) if extra_json_keys else ""
+    fields_block = ("\n" + field_lines) if field_lines else ""
+    unit_json_extra = (",\n      " + field_json_lines) if field_json_lines else ""
+
+    return f"""당신은 한국 고등학교 영어 워크북(학력평가 스타일)을 만드는 전문 튜터입니다.
 주어진 영어 지문으로 아래 구조를 JSON으로만 생성하세요. 설명이나 마크다운 코드펜스 없이 JSON만 출력합니다.
+불필요한 필드는 만들지 마세요 — 요청된 필드만 정확히 채우면 됩니다 (출력을 짧게 유지하는 게 중요함).
 
 ## 지문을 의미 단위(unit)로 나누기
 지문을 자연스러운 의미 단위로 나눕니다 (한 문장일 수도, 짧으면 두 문장을 묶을 수도 있음 —
 원본 학력평가 지문의 단락 구성을 참고해서 자연스럽게). 각 unit에 1부터 순서대로 num을 매깁니다.
-모든 unit에 아래 필드를 전부 채우세요 (일부 단계만 쓰더라도 항상 전체를 생성):
+모든 unit에 아래 필드를 채우세요:
 
 - en: 원문 그대로
-- ko: 자연스러운 한글 번역
-- key_terms: 이 unit에서 밑줄/색 강조할 핵심 어휘·표현 3~6개, 각각 {"en": "...", "ko": "..."}
-  (en은 원문에 실제로 등장하는 형태 그대로, ko는 그 뜻)
-- ko_blanked: ko 번역에서 key_terms에 해당하는 부분을 "_____"로 뚫은 버전
-- en_blanked: en 원문에서 key_terms에 해당하는 부분을 "_____"로 뚫은 버전
-- verb_prompt_en: en 원문에서 동사(구)들을 원형으로 바꿔 괄호로 표시한 버전
-  예: "will be held" → "(hold)". 시제/수동태/조동사 등이 포함된 동사 지점마다 적용.
-- choice_prompt_en: en 원문에서 어법·어휘 포인트 1곳을 "[오답 / 정답]" 형식의 대괄호로 바꾼 버전
-- choice_answer: choice_prompt_en 대괄호의 정답 표현
-- word_order_words: en 원문을 의미 덩어리(단어 또는 짧은 구) 단위로 섞은 배열.
-  관사+명사, 전치사구 등은 하나의 조각으로 묶어도 됨.
-- word_order_answer: word_order_words를 올바르게 배열하면 나오는 원문(en과 동일)
-- given_words_for_writing: 학생이 영작할 때 참고할 핵심 단어 2~5개 (원형)
+- ko: 자연스러운 한글 번역{fields_block}
+{extra_sections_text}
 
-## 어색한 곳 찾기 (flawed_text) — unit과 별개로 지문 전체 대상 1개만 생성
-전체 지문(모든 unit의 en을 이어붙인 것)에서 밑줄 후보 문구를 5~7개 골라 underlined_items 배열로 제시.
-그중 정확히 3개는 어법상 틀리게 만들고(is_wrong: true, correction에 올바른 표현), 나머지는 원문 그대로 맞는
-문구(is_wrong: false, correction 생략). 배열 순서는 지문에 등장하는 순서와 같아야 함.
-
-## 문단 배열하기 (paragraph_order) — 지문 전체 대상 1개만 생성
-지문의 도입부(intro_en, 1~2문장)를 고정하고, 나머지를 3~4개 문단(chunk)으로 나눠 A, B, C(, D) 라벨을 붙임.
-chunks 배열은 뒤섞인 순서로 제시하고, correct_order에 올바른 라벨 순서를 배열로 제시.
-
-## 출력 형식 (JSON)
-{
+## 출력 형식 (JSON) — 아래 키만 포함하세요
+{{
   "units": [
-    {
+    {{
       "num": 1,
-      "en": "...", "ko": "...",
-      "key_terms": [{"en":"annual","ko":"연례"}],
-      "ko_blanked": "...", "en_blanked": "...",
-      "verb_prompt_en": "...",
-      "choice_prompt_en": "...", "choice_answer": "...",
-      "word_order_words": ["...", "..."], "word_order_answer": "...",
-      "given_words_for_writing": ["...", "..."]
-    }
-  ],
-  "flawed_text": {
-    "underlined_items": [
-      {"text": "...", "is_wrong": true, "correction": "..."},
-      {"text": "...", "is_wrong": false}
-    ]
-  },
-  "paragraph_order": {
-    "intro_en": "...",
-    "chunks": [{"label": "A", "text": "..."}, {"label": "B", "text": "..."}],
-    "correct_order": ["B", "A"]
-  }
-}
+      "en": "...", "ko": "..."{unit_json_extra}
+    }}
+  ]{extra_json_text}
+}}
 """
 
 

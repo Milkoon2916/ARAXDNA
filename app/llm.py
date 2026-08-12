@@ -40,11 +40,30 @@ async def call_gemini_json(api_key: str, model: str, system_prompt: str, user_me
 
     data = resp.json()
     try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        candidate = data["candidates"][0]
+        finish_reason = candidate.get("finishReason")
+        text = candidate["content"]["parts"][0]["text"]
     except (KeyError, IndexError):
+        finish_reason = data.get("candidates", [{}])[0].get("finishReason") if data.get("candidates") else None
+        if finish_reason == "MAX_TOKENS":
+            raise HTTPException(
+                status_code=502,
+                detail="지문이 너무 길거나 선택한 항목이 많아서 응답이 도중에 잘렸어요. 단계를 줄이거나 지문을 나눠서 다시 시도해주세요.",
+            )
         raise HTTPException(status_code=502, detail="Gemini 응답 형식이 예상과 달라요.")
 
+    if finish_reason == "MAX_TOKENS":
+        raise HTTPException(
+            status_code=502,
+            detail="지문이 너무 길거나 선택한 항목이 많아서 응답이 도중에 잘렸어요. 단계를 줄이거나 지문을 나눠서 다시 시도해주세요.",
+        )
+
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="Gemini가 유효한 JSON을 반환하지 않았어요. 다시 시도해주세요.")
+
+    if not parsed or (isinstance(parsed, dict) and not any(parsed.values())):
+        raise HTTPException(status_code=502, detail="Gemini가 빈 결과를 반환했어요. 다시 시도해주세요.")
+
+    return parsed
