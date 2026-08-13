@@ -4,12 +4,21 @@ Gemini API 호출 담당.
 서버가 직접 Gemini를 호출함 (예전처럼 브라우저가 직접 호출하는 BYOK 방식이 아니라,
 키를 서버 DB에 저장하기로 했으므로 서버가 대신 호출하는 구조로 바뀜).
 """
+import asyncio
 import json
+import random
 
 import httpx
 from fastapi import HTTPException
 
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+# Gemini 쪽 일시적 과부하/타임아웃(주로 503, 간헐적으로 500)은 잠깐 후 재시도하면
+# 대부분 성공함. 4개 자료를 asyncio.gather로 동시에 쏘다 보니 순간적으로 겹쳐서
+# 503이 뜨는 경우가 흔해서, 실패해도 바로 포기하지 않고 몇 번 재시도함.
+RETRYABLE_STATUS_CODES = {500, 503, 504}
+MAX_RETRIES = 3
+BASE_BACKOFF_SECONDS = 1.5
 
 
 async def call_gemini_json(api_key: str, model: str, system_prompt: str, user_message: str) -> dict:
@@ -25,8 +34,20 @@ async def call_gemini_json(api_key: str, model: str, system_prompt: str, user_me
         },
     }
 
+    resp = None
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(url, params={"key": api_key}, json=payload)
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                resp = await client.post(url, params={"key": api_key}, json=payload)
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempt == MAX_RETRIES:
+                    raise HTTPException(status_code=502, detail="Gemini 호출이 계속 실패했어요. 잠시 후 다시 시도해주세요.")
+                await asyncio.sleep(BASE_BACKOFF_SECONDS * (2 ** attempt) + random.uniform(0, 0.5))
+                continue
+
+            if resp.status_code not in RETRYABLE_STATUS_CODES or attempt == MAX_RETRIES:
+                break
+            await asyncio.sleep(BASE_BACKOFF_SECONDS * (2 ** attempt) + random.uniform(0, 0.5))
 
     if resp.status_code == 429:
         raise HTTPException(
