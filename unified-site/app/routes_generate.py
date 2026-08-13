@@ -51,6 +51,17 @@ async def _get_teacher_gemini(teacher_id: int, db):
     return decrypt_api_key(teacher.gemini_api_key_encrypted), teacher.gemini_model
 
 
+def _unwrap_analysis_result(result: dict) -> dict:
+    """analysis_schema.AnalysisResponse는 {"passages": [PassageAnalysis, ...]} 형태로
+    Gemini에게 강제되는데, PDF 템플릿(analysis_pdf.html)과 프론트엔드는 둘 다
+    summary/sentences/vocabulary가 최상위에 바로 있는 '단일 지문' 형태를 기대한다.
+    이 불일치 때문에 지문분석 PDF가 항상 빈칸으로 나오고 핵심 어휘(단어 추출)도 전혀
+    채워지지 않았음 -> 여기서 항상 첫 번째 지문을 최상위로 꺼내 평탄화해서 저장/렌더링에 쓴다."""
+    if isinstance(result, dict) and isinstance(result.get("passages"), list) and result["passages"]:
+        return result["passages"][0]
+    return result
+
+
 @router.post("/passage-analysis")
 async def generate_analysis(
     body: GenerateRequest,
@@ -63,6 +74,7 @@ async def generate_analysis(
     system_prompt = build_analysis_prompt()
     user_message = build_analysis_user_message(body.passage_text, body.target_grammar)
     result = await call_gemini_json(api_key, model or ANALYSIS_MODEL, system_prompt, user_message)
+    result = _unwrap_analysis_result(result)
 
     material = db.create_material(passage.id, "analysis", json.dumps(result, ensure_ascii=False))
     return {"passage_id": passage.id, "material_id": material.id, "result": result}
@@ -166,6 +178,8 @@ async def generate_all(
             detail = res.detail if isinstance(res, HTTPException) else str(res)
             errors[key] = detail
             continue
+        if key == "analysis":
+            res = _unwrap_analysis_result(res)
         if key == "workbook":
             res["_selected_steps"] = workbook_steps
         material = db.create_material(passage.id, key, json.dumps(res, ensure_ascii=False))
@@ -180,7 +194,13 @@ def get_materials(passage_id: int, teacher_id: int = Depends(get_current_teacher
     if not passage:
         raise HTTPException(status_code=404, detail="지문을 찾을 수 없어요.")
     rows = db.list_materials(passage_id)
-    return [{"id": r.id, "type": r.type, "content": json.loads(r.content), "pdf_path": r.pdf_path} for r in rows]
+    result = []
+    for r in rows:
+        content = json.loads(r.content)
+        if r.type == "analysis":
+            content = _unwrap_analysis_result(content)
+        result.append({"id": r.id, "type": r.type, "content": content, "pdf_path": r.pdf_path})
+    return result
 
 
 @router.get("/materials/{material_id}/pdf")
@@ -194,7 +214,7 @@ def download_material_pdf(material_id: int, teacher_id: int = Depends(get_curren
     title = (passage.title if passage else None) or "학습자료"
 
     if material.type == "analysis":
-        pdf_bytes = render_analysis_pdf(content, title=title)
+        pdf_bytes = render_analysis_pdf(_unwrap_analysis_result(content), title=title)
     elif material.type == "workbook":
         steps = content.pop("_selected_steps", None)
         pdf_bytes = render_workbook_pdf(content, title=title, steps=steps)

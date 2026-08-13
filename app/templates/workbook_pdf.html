@@ -65,6 +65,21 @@
   .order-chunk .label{ font-weight:700; margin-right:6px; }
 
   .writing-hint-bar{ background:#EEEFEC; color:#3F4643; font-size:10.5px; text-align:center; padding:5px; margin:8px 0 6px; border-radius:4px; }
+
+  /* 정답(답지) 페이지 — 항상 문제지 맨 뒤에 붙는다 */
+  .answer-key-page{ background:#FAFAF8; }
+  .answer-key-title{ font-size:16px; font-weight:700; margin:0 0 4px; }
+  .answer-key-subtitle{ font-size:10px; color:#6B6B66; margin:0 0 16px; }
+  .answer-section{ margin-bottom:16px; page-break-inside:avoid; }
+  .answer-section-title{
+    font-size:11.5px; font-weight:700; color:#fff; background:#3F4643;
+    display:inline-block; padding:3px 10px; border-radius:10px; margin-bottom:8px;
+  }
+  .answer-list{ font-size:10.5px; }
+  .answer-row{ display:flex; gap:6px; padding:3px 0; border-bottom:1px dotted #DCDCD8; }
+  .answer-row .a-num{ color:#6B6B66; font-weight:700; flex-shrink:0; width:20px; }
+  .answer-row .a-val{ flex:1; }
+  .answer-order{ display:flex; align-items:center; gap:6px; font-size:11px; }
 </style>
 </head>
 <body>
@@ -245,6 +260,98 @@
   {% endfor %}
 </div>
 {% endif %}
+
+<div class="step-page answer-key-page">
+  <div class="step-header">
+    <span class="step-badge">정답</span>
+    <span class="step-title-text">정답 및 해설</span>
+    <span class="step-doc-title">{{ title }}</span>
+  </div>
+  <p class="answer-key-subtitle">아래는 채점용 정답이에요. 학생용 문제지와 분리해서 선생님만 보관하세요.</p>
+
+  {% if 'step2' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 2. 빈칸 완성하기 (우리말)</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.ko }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step3' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 3. 빈칸 완성하기 (영문)</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.en }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step4' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 4. 해석 연습하기</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.ko }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step5' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 5. 동사형 연습하기</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.en }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step6' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 6. 어법·어휘 고르기</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.choice_answer }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step7' in steps and result.flawed_text %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 7. 어색한 곳 찾기</div>
+    <div class="answer-list">
+      {% for item in result.flawed_text.underlined_items if item.is_wrong %}
+      <div class="answer-row"><span class="a-num">({{ loop.index }})</span><span class="a-val">{{ item.text }} → {{ item.correction }}</span></div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step8' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 8. 순서 배열하기</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.word_order_answer }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step9' in steps and result.paragraph_order %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 9. 문단 배열하기</div>
+    <div class="answer-order">
+      {% for label in result.paragraph_order.correct_order %}<span>{{ label }}</span>{% if not loop.last %}→{% endif %}{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if 'step10' in steps %}
+  <div class="answer-section">
+    <div class="answer-section-title">STEP 10. 영작 연습하기 (예시 답안)</div>
+    <div class="answer-list">
+      {% for u in result.units %}<div class="answer-row"><span class="a-num">{{ u.num }}.</span><span class="a-val">{{ u.en }}</span></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
 
 </body>
 </html>
