@@ -125,10 +125,10 @@ let vocabWords = [];
 
 const MATERIAL_LABELS = {analysis:'지문분석', workbook:'워크북', ox:'O/X', grammar_quiz:'목표어법 문제'};
 const STEP_LABELS = {
-  step1: "1. 지문 연습하기", step2: "2. 빈칸(우리말)", step3: "3. 빈칸(영문)",
-  step4: "4. 해석 연습하기", step5: "5. 동사형 연습하기", step6: "6. 어법·어휘 고르기",
-  step7: "7. 어색한 곳 찾기", step8: "8. 순서 배열하기", step9: "9. 문단 배열하기",
-  step10: "10. 영작 연습하기",
+  step2: "1. 빈칸(우리말)", step3: "2. 빈칸(영문)",
+  step4: "3. 해석 연습하기", step5: "4. 동사형 연습하기", step6: "5. 어법·어휘 고르기",
+  step7: "6. 어색한 곳 찾기", step8: "7. 순서 배열하기", step9: "8. 문단 배열하기",
+  step10: "9. 영작 연습하기", final_check: "Final Check (최종 점검)",
 };
 
 const materialsGrid = document.getElementById('materialsGrid');
@@ -253,27 +253,69 @@ function renderAll(materials, workbookSteps){
   renderVocabCheckboxes(vocabWords);
 }
 
+const BADGE_KO = {topic:'주제문', insert:'문장삽입', target:'목표 어법'};
+const BADGE_COLOR = {topic:'#17324d', insert:'#2e9e6b', target:'#8b3fa0'};
+const TAG_COLOR = {g:'#d3222a', v:'#2266cc', gv:'#8b3fa0'};
+const NOTE_LABEL = {comprehension:'독해 포인트', grammar:'어법 포인트', blank:'빈칸', writing:'서술형', implication:'함의추론', theme:'주제'};
+const NOTE_COLOR = {comprehension:'#3a7bd5', grammar:'#d3222a', blank:'#e08a1e', writing:'#2e9e6b', implication:'#8b3fa0', theme:'#17324d'};
+
 function renderAnalysis(result, materialId){
   const box = document.getElementById('panel-analysis');
   let html = dlButton(materialId);
-  if(result.summary){
-    html += `<div class="summary-box"><h3 style="margin:0 0 6px;">지문 요약</h3>
-      <p><strong>주제:</strong> ${result.summary.theme||''}</p>
-      <p><strong>흐름:</strong> ${result.summary.flow||''}</p>
-      <p>${result.summary.background||''}</p></div>`;
+
+  html += `<div class="summary-box" style="margin-bottom:14px;">
+    <h3 style="margin:0 0 4px;">${result.title_en||''}</h3>
+    <p class="hint" style="margin:0 0 8px;">${result.title_kr||''}</p>`;
+  if(result.target_grammar){
+    html += `<p style="color:#8b3fa0; font-weight:700; font-size:13px; margin:0 0 8px;">목표 어법: ${result.target_grammar}</p>`;
   }
+  if(result.summary){
+    html += `<p><strong>주제:</strong> ${result.summary.theme||''}</p>
+      <p><strong>흐름:</strong> ${result.summary.flow||''}</p>
+      <p>${result.summary.background||''}</p>`;
+  }
+  html += `</div>`;
+
   (result.sentences||[]).forEach(sent => {
-    const badge = sent.badge ? `<span class="badge">${sent.badge}</span>` : '';
-    const enText = (sent.tokens||[]).map(t=>t.text).join(' ');
-    const notes = (sent.notes||[]).map(n=>`· ${n.text||n.content||''}`).join('<br>');
-    html += `<div class="sentence-block">${badge}<div class="en">[${sent.num}] ${enText}</div>
+    const badgeKey = sent.badge;
+    const badge = badgeKey && BADGE_KO[badgeKey]
+      ? `<span class="badge" style="background:${BADGE_COLOR[badgeKey]}; color:#fff;">${BADGE_KO[badgeKey]}</span> `
+      : '';
+    const enHtml = (sent.tokens||[]).map(t => {
+      if(t.type === 'tag'){
+        const color = TAG_COLOR[t.tag_class] || TAG_COLOR.g;
+        return `<span style="display:inline-block; text-align:center; vertical-align:top; margin:0 1px;">
+          <span style="color:${color}; font-weight:700;">${t.text}</span>
+          <span style="display:block; font-size:9px; color:#8a8a8a; line-height:1.2;">${t.caption||''}</span>
+        </span>`;
+      }
+      if(t.type === 'conn') return `<span style="text-decoration:underline; text-decoration-color:#999;">${t.text}</span>`;
+      if(t.type === 'hl') return `<span style="background:#fff2a8;">${t.text}</span>`;
+      return t.text;
+    }).join(' ');
+    const notes = (sent.notes||[]).map(n => {
+      const label = NOTE_LABEL[n.category] || '포인트';
+      const color = NOTE_COLOR[n.category] || '#6B6B66';
+      return `<div style="margin-top:6px;"><span style="display:inline-block; font-size:10px; font-weight:700; color:#fff; background:${color}; padding:1px 7px; border-radius:8px; margin-bottom:3px;">${sent.num}번 ${label}</span><div>${n.body||''}</div></div>`;
+    }).join('');
+    html += `<div class="sentence-block">${badge}<span style="display:inline-block; background:#17324d; color:#fff; width:16px; height:16px; text-align:center; line-height:16px; font-size:11px; border-radius:50%; margin-right:4px;">${sent.num}</span><span class="en">${enHtml}</span>
       <div class="ko">${sent.translation||''}</div><div class="notes">${notes}</div></div>`;
   });
+
+  if(result.vocabulary && result.vocabulary.length){
+    html += `<h3 style="margin:16px 0 8px;">핵심 어휘 &amp; 유의어·반의어</h3><div class="voca-list">`;
+    result.vocabulary.forEach(v => {
+      html += `<div class="voca-row"><strong>${v.word}</strong> <span class="meaning">${v.meaning||''}</span>
+        <span class="hint" style="margin-left:auto;">유의어: ${v.synonym||'-'} / 반의어: ${v.antonym||'-'}</span></div>`;
+    });
+    html += `</div>`;
+  }
+
   box.innerHTML = html;
 }
 
 function renderWorkbook(result, materialId, steps){
-  steps = steps && steps.length ? steps : ['step1','step2','step3','step4','step5','step6','step7','step8','step9','step10'];
+  steps = steps && steps.length ? steps : ['step2','step3','step4','step5','step6','step7','step8','step9','step10','final_check'];
   const box = document.getElementById('panel-workbook');
   box.innerHTML = '';
   box.appendChild(Object.assign(document.createElement('div'), {innerHTML: dlButton(materialId)}));
@@ -307,10 +349,6 @@ function renderWorkbook(result, materialId, steps){
 
 function renderWorkbookStep(step, result){
   const units = result.units || [];
-  if(step === 'step1'){
-    return '<div class="hint" style="margin-bottom:10px;">영문과 해석을 읽고 문장의 의미를 이해해 보세요.</div>' +
-      units.map(u => `<div class="block">${u.num}. ${u.en}<div class="ko">${u.ko}</div></div>`).join('');
-  }
   if(step === 'step2'){
     return '<div class="hint" style="margin-bottom:10px;">영문을 보고 우리말 해석의 빈칸을 완성해 보세요.</div>' +
       units.map(u => `<div class="block">${u.num}. ${u.en}<div class="ko">${u.ko_blanked}</div></div>`).join('');
@@ -355,6 +393,27 @@ function renderWorkbookStep(step, result){
   if(step === 'step10'){
     return '<div class="hint" style="margin-bottom:10px;">우리말과 같은 뜻이 되도록 주어진 단어를 순서대로 사용하여 영작하세요.</div>' +
       units.map(u => `<div class="block">${u.num}. ${u.ko}<div class="badge">${(u.given_words_for_writing||[]).join(', ')}</div><div class="hint">(직접 영작을 써 보세요)</div></div>`).join('');
+  }
+  if(step === 'final_check'){
+    const fc = result.final_check;
+    if(!fc || !(fc.blocks||[]).length) return '<p class="hint">생성된 데이터가 없어요.</p>';
+    const legend = `<div class="hint" style="margin-bottom:10px;">
+      <span style="color:#D3222A;font-weight:700;">빈칸</span> 어휘/문법 빈칸 &nbsp;
+      <strong>[A / B]</strong> 어법·어휘 고르기 &nbsp;
+      <span style="color:#2E9E6B;font-weight:700;">순서배열</span> 단어 배열 &nbsp;
+      <span style="text-decoration:underline; font-weight:700;">밑줄</span> 영작
+    </div>`;
+    const blocks = fc.blocks.map(b => {
+      const en = (b.segments||[]).map(seg => {
+        if(seg.type === 'blank') return `<span style="color:#D3222A;font-weight:700;">빈칸</span>${'\u2003'.repeat(seg.word_count||1)}<sup>${seg.num})</sup>`;
+        if(seg.type === 'choice') return `<strong>[${(seg.choices||[]).join(' / ')}]</strong><sup>${seg.num})</sup>`;
+        if(seg.type === 'order') return `<span style="color:#2E9E6B;font-weight:700;">순서배열</span>(${(seg.words||[]).join(', ')})<sup>${seg.num})</sup>`;
+        if(seg.type === 'writing') return `<span style="text-decoration:underline; font-weight:700;">${seg.prompt_ko||''}</span>(${(seg.given_words||[]).join(', ')})<sup>${seg.num})</sup>`;
+        return seg.text || '';
+      }).join('');
+      return `<div class="block">${b.num}. ${en}<div class="ko">${b.ko||''}</div></div>`;
+    }).join('');
+    return legend + blocks;
   }
   return '';
 }

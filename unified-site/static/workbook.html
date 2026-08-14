@@ -60,6 +60,11 @@
   .order-box .chunk{margin-bottom:8px;}
   .writing-hint{background:var(--accent-soft); color:var(--text); font-size:12.5px; padding:5px 10px; border-radius:6px; display:inline-block; margin:6px 0;}
 
+  .fc-tag{display:inline-block; font-size:10px; font-weight:700; padding:1px 6px; border-radius:8px; color:#fff;}
+  .fc-blank{background:#D3222A;}
+  .fc-order{background:#2E9E6B;}
+  .fc-block-num{display:inline-block; background:var(--text); color:#fff; width:18px; height:18px; text-align:center; line-height:18px; border-radius:50%; font-size:11px; margin-right:6px;}
+
   .dl-link{
     display:inline-block; margin-bottom:12px; padding:9px 18px; background:var(--text); color:#fff;
     text-decoration:none; border-radius:8px; font-size:13px; font-weight:700;
@@ -96,10 +101,10 @@
 
 <script>
 const STEP_LABELS = {
-  step1: "1. 지문 연습하기", step2: "2. 빈칸(우리말)", step3: "3. 빈칸(영문)",
-  step4: "4. 해석 연습하기", step5: "5. 동사형 연습하기", step6: "6. 어법·어휘 고르기",
-  step7: "7. 어색한 곳 찾기", step8: "8. 순서 배열하기", step9: "9. 문단 배열하기",
-  step10: "10. 영작 연습하기",
+  step2: "1. 빈칸(우리말)", step3: "2. 빈칸(영문)",
+  step4: "3. 해석 연습하기", step5: "4. 동사형 연습하기", step6: "5. 어법·어휘 고르기",
+  step7: "6. 어색한 곳 찾기", step8: "7. 순서 배열하기", step9: "8. 문단 배열하기",
+  step10: "9. 영작 연습하기", final_check: "Final Check (최종 점검)",
 };
 const ALL_STEPS = Object.keys(STEP_LABELS);
 
@@ -188,10 +193,6 @@ function render(result, materialId, steps){
 
 function renderStep(step, result){
   const units = result.units || [];
-  if(step === 'step1'){
-    return '<div class="instruction">영문과 해석을 읽고 문장의 의미를 이해해 보세요.</div>' +
-      units.map(u => `<div class="unit-block">${u.num}. ${u.en}<div class="ko">${u.ko}</div></div>`).join('');
-  }
   if(step === 'step2'){
     return '<div class="instruction">영문을 보고 우리말 해석의 빈칸을 완성해 보세요.</div>' +
       units.map(u => `<div class="unit-block">${u.num}. ${u.en}<div class="ko">${u.ko_blanked}</div></div>`).join('');
@@ -236,6 +237,20 @@ function renderStep(step, result){
   if(step === 'step10'){
     return '<div class="instruction">우리말과 같은 뜻이 되도록 주어진 단어를 순서대로 사용하여 영작하세요.</div>' +
       units.map(u => `<div class="unit-block">${u.num}. ${u.ko}<div class="writing-hint">${(u.given_words_for_writing||[]).join(', ')}</div><div class="hint">(직접 영작을 써 보세요)</div></div>`).join('');
+  }
+  if(step === 'final_check'){
+    const fc = result.final_check;
+    if(!fc || !fc.blocks) return '<p class="hint">생성된 데이터가 없어요.</p>';
+    const renderSeg = (seg) => {
+      if(seg.type === 'text') return seg.text;
+      if(seg.type === 'blank') return ` <span class="fc-tag fc-blank">빈칸</span>${'_'.repeat(10)} <sup>${seg.num})</sup>`;
+      if(seg.type === 'choice') return ` <b>[${seg.choices[0]} / ${seg.choices[1]}]</b><sup>${seg.num})</sup>`;
+      if(seg.type === 'order') return ` <span class="fc-tag fc-order">순서배열</span>(${(seg.words||[]).join(', ')})<sup>${seg.num})</sup>`;
+      if(seg.type === 'writing') return ` <u><b>${seg.prompt_ko}</b></u>(${(seg.given_words||[]).join(', ')})<sup>${seg.num})</sup>`;
+      return '';
+    };
+    return '<div class="instruction">영문과 해석을 읽으며 빈칸·어법·순서배열·영작을 한 번에 점검해 보세요.</div>' +
+      fc.blocks.map(b => `<div class="unit-block"><span class="fc-block-num">${b.num}</span>${b.segments.map(renderSeg).join('')}<div class="ko">${b.ko}</div></div>`).join('');
   }
   return '';
 }

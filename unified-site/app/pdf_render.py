@@ -8,6 +8,8 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
+from .prompts import ALL_WORKBOOK_STEPS
+
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 FONTS_DIR = BASE_DIR / "assets" / "fonts"
@@ -26,7 +28,7 @@ def render_analysis_pdf(result: dict, title: str | None = None) -> bytes:
 
 def render_workbook_pdf(result: dict, title: str | None = None, steps: list[str] | None = None) -> bytes:
     template = env.get_template("workbook_pdf.html")
-    steps = steps or ["step1", "step2", "step3", "step4", "step5", "step6", "step7", "step8", "step9", "step10"]
+    steps = steps or ALL_WORKBOOK_STEPS
     html_str = template.render(result=result, title=title, steps=steps, font_regular=FONT_REGULAR, font_bold=FONT_BOLD)
     return HTML(string=html_str, base_url=str(BASE_DIR)).write_pdf()
 

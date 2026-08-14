@@ -90,7 +90,11 @@ async def generate_workbook(
     passage = db.create_passage(teacher_id, body.passage_text, body.title)
 
     user_message = build_workbook_user_message(body.passage_text)
-    result = await call_gemini_json(api_key, model or WORKBOOK_MODEL, WORKBOOK_SYSTEM_PROMPT, user_message)
+    # final_check 단계(빈칸/선택/순서/영작 20~40개)가 추가되면서 응답이 커져서
+    # 기본 16000 토큰으로는 종종 잘림 -> 워크북만 26000으로 올림.
+    result = await call_gemini_json(
+        api_key, model or WORKBOOK_MODEL, WORKBOOK_SYSTEM_PROMPT, user_message, max_output_tokens=26000,
+    )
     result["_selected_steps"] = body.workbook_steps or ALL_WORKBOOK_STEPS
 
     material = db.create_material(passage.id, "workbook", json.dumps(result, ensure_ascii=False))
@@ -155,6 +159,7 @@ async def generate_all(
         calls["workbook"] = call_gemini_json(
             api_key, model or WORKBOOK_MODEL, WORKBOOK_SYSTEM_PROMPT,
             build_workbook_user_message(body.passage_text),
+            max_output_tokens=26000,
         )
     if "ox" in selected:
         calls["ox"] = call_gemini_json(

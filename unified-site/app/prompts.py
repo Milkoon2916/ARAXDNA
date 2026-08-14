@@ -8,10 +8,6 @@
   기존 comprehension 프론트엔드에 있던 원본 프롬프트가 더 정교했을 수 있으니,
   실제 결과물이 기존 버전과 다르게 느껴지면 원본 JS 파일의 프롬프트로 교체 권장.
 """
-import json
-
-from .analysis_schema import AnalysisResponse
-
 ANALYSIS_MODEL = "gemini-3.5-flash"
 WORKBOOK_MODEL = "gemini-3.5-flash"
 OX_MODEL = "gemini-3.5-flash"
@@ -48,15 +44,44 @@ theme / flow(도입→전개→결론) / background(4-7문장).
 핵심 어휘 8~12개. word/meaning/synonym/antonym. 고등학교 필수 수준으로만 제시.
 
 ## 출력 형식
-아래 JSON 스키마를 따르는 순수 JSON만 출력하세요:
+아래 형태의 순수 JSON만 출력하세요 (마크다운 코드펜스 금지, 예시의 필드명/구조를 정확히 따를 것):
 
-{schema}
+{{
+  "passages": [
+    {{
+      "title_en": "...", "title_kr": "...", "passage_index": 1,
+      "target_grammar": "..." 또는 null,
+      "sentences": [
+        {{
+          "num": 1, "badge": "topic" | "insert" | "target" | null,
+          "tokens": [
+            {{"type": "text", "text": "While "}},
+            {{"type": "tag", "text": "scrolling through", "tag_class": "g", "caption": "분사구문"}},
+            {{"type": "conn", "text": "However"}},
+            {{"type": "hl", "text": "핵심 구절"}}
+          ],
+          "translation": "자연스러운 한글 번역",
+          "notes": [
+            {{"category": "comprehension", "body": "친근한 반말 과외 말투 2-4문장"}}
+          ]
+        }}
+      ],
+      "summary": {{"theme": "...", "flow": "도입(...) → 전개(...) → 결론(...)", "background": "4-7문장"}},
+      "vocabulary": [
+        {{"word": "...", "meaning": "...", "synonym": "..." 또는 null, "antonym": "..." 또는 null}}
+      ]
+    }}
+  ]
+}}
+
+tokens[].type은 "text"(일반 텍스트)/"tag"(설명 필요한 단어·구)/"conn"(연결어)/"hl"(핵심구) 중 하나.
+type="tag"일 때만 tag_class("g"/"v"/"gv")와 caption(2-6자 한글)을 채우세요.
+notes[].category는 "comprehension"/"grammar"/"blank"/"writing"/"implication"/"theme" 중 해당하는 것만.
 """
 
 
 def build_analysis_prompt() -> str:
-    schema_json = AnalysisResponse.model_json_schema()
-    return ANALYSIS_SYSTEM_PROMPT_TEMPLATE.format(schema=json.dumps(schema_json, ensure_ascii=False, indent=2))
+    return ANALYSIS_SYSTEM_PROMPT_TEMPLATE
 
 
 def build_analysis_user_message(passage_text: str, target_grammar: str | None = None) -> str:
@@ -77,7 +102,6 @@ def build_analysis_user_message(passage_text: str, target_grammar: str | None = 
 # 단계만 보여주면 되므로 구현도 단순해짐.
 
 WORKBOOK_STEP_LABELS = {
-    "step1": "지문 연습하기",
     "step2": "빈칸 완성하기 (우리말)",
     "step3": "빈칸 완성하기 (영문)",
     "step4": "해석 연습하기",
@@ -87,8 +111,15 @@ WORKBOOK_STEP_LABELS = {
     "step8": "순서 배열하기",
     "step9": "문단 배열하기",
     "step10": "영작 연습하기",
+    "final_check": "Final Check (최종 점검)",
 }
 ALL_WORKBOOK_STEPS = list(WORKBOOK_STEP_LABELS.keys())
+
+# 화면/PDF에 보여줄 단계 번호(1지문연습하기가 빠지면서 STEP 2였던 것부터 다시 1로 매김).
+# final_check는 번호 없이 별도 "FINAL CHECK" 배지로 표시.
+WORKBOOK_STEP_DISPLAY_NUM = {key: i + 1 for i, key in enumerate(
+    ["step2", "step3", "step4", "step5", "step6", "step7", "step8", "step9", "step10"]
+)}
 
 WORKBOOK_SYSTEM_PROMPT = """당신은 한국 고등학교 영어 워크북(학력평가 스타일)을 만드는 전문 튜터입니다.
 주어진 영어 지문으로 아래 구조를 JSON으로만 생성하세요. 설명이나 마크다운 코드펜스 없이 JSON만 출력합니다.
@@ -122,6 +153,26 @@ WORKBOOK_SYSTEM_PROMPT = """당신은 한국 고등학교 영어 워크북(학�
 지문의 도입부(intro_en, 1~2문장)를 고정하고, 나머지를 3~4개 문단(chunk)으로 나눠 A, B, C(, D) 라벨을 붙임.
 chunks 배열은 뒤섞인 순서로 제시하고, correct_order에 올바른 라벨 순서를 배열로 제시.
 
+## Final Check (final_check) — 지문 전체를 훑는 종합 점검 문제, 지문 전체 대상 1개만 생성
+지문 전체를 자연스러운 문단/문단(또는 화자 전환) 단위로 3~6개의 block으로 나눕니다. 각 block은
+그 부분의 원문을 이어서 담되, 부분부분을 아래 4가지 문제 유형으로 바꿔 segments 배열에 순서대로
+나열합니다 (원문 순서를 그대로 유지, 어길 수 없음):
+
+- {"type": "text", "text": "..."} — 그대로 두는 일반 텍스트 조각.
+- {"type": "blank", "num": N, "word_count": 1~3, "answer": "..."} — 어휘/문법 빈칸. answer는 지문에서
+  실제로 그 자리에 들어가는 단어(구) 원형 그대로. word_count는 answer의 단어 개수.
+- {"type": "choice", "num": N, "choices": ["오답", "정답"], "answer": "정답"} — 괄호 안에서 고르는
+  어법/어휘 문제. choices는 반드시 2개, 정답은 choices 안에 그대로 포함.
+- {"type": "order", "num": N, "words": ["...", "..."], "answer": "올바른 어순의 완전한 구/절"} — 순서
+  배열. words는 3~6개의 의미 단위로 섞은 배열.
+- {"type": "writing", "num": N, "prompt_ko": "우리말 지시 문구", "given_words": ["...", "..."],
+  "answer": "정답 영어 문장/구"} — 영작. given_words는 학생에게 힌트로 주는 원형 단어 2~4개.
+
+블록 전체를 이어 붙였을 때 지문 원문과 의미가 같아야 합니다(빈칸/선택/순서/영작으로 바뀐 부분 제외).
+num은 지문 전체를 통틀어 1부터 순서대로 매기고(문서 전체에서 유일), 총 문제 수는 지문 길이에 비례해
+20~40개 정도. 네 가지 유형을 골고루 섞으세요(어느 한 유형에 치우치지 말 것). 각 block에는 해당
+부분의 자연스러운 한글 번역(ko)도 함께 제공합니다.
+
 ## 출력 형식 (JSON)
 {
   "units": [
@@ -146,6 +197,25 @@ chunks 배열은 뒤섞인 순서로 제시하고, correct_order에 올바른 �
     "intro_en": "...",
     "chunks": [{"label": "A", "text": "..."}, {"label": "B", "text": "..."}],
     "correct_order": ["B", "A"]
+  },
+  "final_check": {
+    "blocks": [
+      {
+        "num": 1,
+        "ko": "이 블록 전체의 자연스러운 한글 번역",
+        "segments": [
+          {"type": "text", "text": "Hi, I'm Jim Brown, the "},
+          {"type": "blank", "num": 1, "word_count": 1, "answer": "director"},
+          {"type": "text", "text": " of Happy Days. A lot of people are "},
+          {"type": "choice", "num": 2, "choices": ["work", "working"], "answer": "working"},
+          {"type": "text", "text": " hard. "},
+          {"type": "order", "num": 3, "words": ["moments", "happy", "their", "capture", "to"], "answer": "To capture their happy moments"},
+          {"type": "text", "text": ", I use drones. So, I "},
+          {"type": "writing", "num": 4, "prompt_ko": "더 좋은 이야기를 만들기 위해서", "given_words": ["create", "better", "story"], "answer": "To create a better story"},
+          {"type": "text", "text": ", I can change the order."}
+        ]
+      }
+    ]
   }
 }
 """
