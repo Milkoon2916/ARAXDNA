@@ -127,7 +127,9 @@ async def generate_grammar_quiz(
     passage = db.create_passage(teacher_id, body.passage_text, body.title)
 
     user_message = build_grammar_quiz_user_message(body.passage_text, body.target_grammar)
-    result = await call_gemini_json(api_key, model or GRAMMAR_QUIZ_MODEL, GRAMMAR_QUIZ_SYSTEM_PROMPT, user_message)
+    result = await call_gemini_json(
+        api_key, model or GRAMMAR_QUIZ_MODEL, GRAMMAR_QUIZ_SYSTEM_PROMPT, user_message, max_output_tokens=20000,
+    )
 
     material = db.create_material(passage.id, "grammar_quiz", json.dumps(result, ensure_ascii=False))
     return {"passage_id": passage.id, "material_id": material.id, "result": result}
@@ -170,6 +172,7 @@ async def generate_all(
         calls["grammar_quiz"] = call_gemini_json(
             api_key, model or GRAMMAR_QUIZ_MODEL, GRAMMAR_QUIZ_SYSTEM_PROMPT,
             build_grammar_quiz_user_message(body.passage_text, body.target_grammar),
+            max_output_tokens=20000,
         )
 
     keys = list(calls.keys())
