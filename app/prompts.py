@@ -4,14 +4,11 @@
 - ANALYSIS_SYSTEM_PROMPT: 기존 워크북 사이트(WEB) app/prompt.py에서 그대로 이식.
 - WORKBOOK_SYSTEM_PROMPT: 이전 대화에서 정리된 4단계 스펙(해석/빈칸/순서/언스크램블)을
   기준으로 새로 작성. 실제 서비스 반영 전에 한 번 검수 필요.
-- OX_SYSTEM_PROMPT: 랜딩 페이지 설명("한글 O/X 10문항 + 영어 O/X 5문항")을 기준으로 작성.
+- OX_SYSTEM_PROMPT: 랜딩 페이지 설명("한글 O/X + 영어 O/X, 선생님이 문항 수 지정 가능(각 최대 20개)")을
+  기준으로 작성.
   기존 comprehension 프론트엔드에 있던 원본 프롬프트가 더 정교했을 수 있으니,
   실제 결과물이 기존 버전과 다르게 느껴지면 원본 JS 파일의 프롬프트로 교체 권장.
 """
-import json
-
-from .analysis_schema import AnalysisResponse
-
 ANALYSIS_MODEL = "gemini-3.5-flash"
 WORKBOOK_MODEL = "gemini-3.5-flash"
 OX_MODEL = "gemini-3.5-flash"
@@ -45,48 +42,48 @@ ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """당신은 한국 수능/CSAT 영어 독해 
 theme / flow(도입→전개→결론) / background(4-7문장).
 
 ## 6. 어휘표 (vocabulary)
-핵심 어휘 8~12개. word/meaning/synonym/antonym. 고등학교 필수 수준으로만 제시.
+핵심 어휘 최소 30개 이상 (지문이 짧으면 파생어·관련 표현까지 포함해서라도 30개를 채울 것).
+word/meaning/synonym/antonym. 고등학교 필수 수준으로만 제시.
 
 ## 출력 형식
-아래 JSON 스키마를 따르는 순수 JSON만 출력하세요:
+아래 형태의 순수 JSON만 출력하세요 (마크다운 코드펜스 금지, 예시의 필드명/구조를 정확히 따를 것):
 
-{schema}
+{{
+  "passages": [
+    {{
+      "title_en": "...", "title_kr": "...", "passage_index": 1,
+      "target_grammar": "..." 또는 null,
+      "sentences": [
+        {{
+          "num": 1, "badge": "topic" | "insert" | "target" | null,
+          "tokens": [
+            {{"type": "text", "text": "While "}},
+            {{"type": "tag", "text": "scrolling through", "tag_class": "g", "caption": "분사구문"}},
+            {{"type": "conn", "text": "However"}},
+            {{"type": "hl", "text": "핵심 구절"}}
+          ],
+          "translation": "자연스러운 한글 번역",
+          "notes": [
+            {{"category": "comprehension", "body": "친근한 반말 과외 말투 2-4문장"}}
+          ]
+        }}
+      ],
+      "summary": {{"theme": "...", "flow": "도입(...) → 전개(...) → 결론(...)", "background": "4-7문장"}},
+      "vocabulary": [
+        {{"word": "...", "meaning": "...", "synonym": "..." 또는 null, "antonym": "..." 또는 null}}
+      ]
+    }}
+  ]
+}}
+
+tokens[].type은 "text"(일반 텍스트)/"tag"(설명 필요한 단어·구)/"conn"(연결어)/"hl"(핵심구) 중 하나.
+type="tag"일 때만 tag_class("g"/"v"/"gv")와 caption(2-6자 한글)을 채우세요.
+notes[].category는 "comprehension"/"grammar"/"blank"/"writing"/"implication"/"theme" 중 해당하는 것만.
 """
 
 
 def build_analysis_prompt() -> str:
-    schema_json = AnalysisResponse.model_json_schema()
-    return ANALYSIS_SYSTEM_PROMPT_TEMPLATE.format(schema=json.dumps(schema_json, ensure_ascii=False, indent=2))
-
-
-import re
-
-
-_ABBREVS = {"mr.", "ms.", "mrs.", "dr.", "prof.", "st.", "jr.", "sr.", "e.g.", "i.e.", "vs.", "etc.", "u.s.", "u.k."}
-
-
-def _split_sentences(passage_text: str) -> list[str]:
-    """지문을 문장 단위로 나눔. 마침표/느낌표/물음표 뒤 공백을 기준으로 자르되,
-    'Mr.' 'Dr.' 'e.g.' 같은 흔한 약어 뒤에서 잘못 잘린 경우는 다시 이어붙임
-    (완벽하진 않지만 실사용 지문에선 충분히 정확함)."""
-    text = passage_text.strip()
-    if not text:
-        return []
-
-    marked = re.sub(r'([.!?]+[\"\')\]]?)\s+(?=[A-Z\"\'\(])', r'\1<<<SPLIT>>>', text)
-    raw_parts = marked.split('<<<SPLIT>>>')
-    raw_parts = [p.strip() for p in raw_parts if p.strip()]
-
-    sentences: list[str] = []
-    for part in raw_parts:
-        if sentences:
-            last_word = sentences[-1].split()[-1].lower() if sentences[-1].split() else ""
-            if last_word in _ABBREVS:
-                sentences[-1] = sentences[-1] + " " + part
-                continue
-        sentences.append(part)
-
-    return sentences if sentences else [text]
+    return ANALYSIS_SYSTEM_PROMPT_TEMPLATE
 
 
 def build_analysis_user_message(passage_text: str, target_grammar: str | None = None) -> str:
@@ -94,11 +91,7 @@ def build_analysis_user_message(passage_text: str, target_grammar: str | None = 
     if target_grammar and target_grammar.strip():
         lines.append(f"목표 어법: {target_grammar.strip()}")
     lines.append("")
-
-    sentences = _split_sentences(passage_text)
-    for i, s in enumerate(sentences, start=1):
-        lines.append(f"[{i}] {s}")
-
+    lines.append(passage_text.strip())
     return "\n".join(lines)
 
 
@@ -110,19 +103,7 @@ def build_analysis_user_message(passage_text: str, target_grammar: str | None = 
 # 단계마다 스키마를 따로 요청하는 것보다 훨씬 안정적이고, 화면/PDF 쪽에서 선택된
 # 단계만 보여주면 되므로 구현도 단순해짐.
 
-# ---------- 워크북 (레퍼런스 형식 10단계) ----------
-# 10단계 전부: 1지문연습 2빈칸(우리말) 3빈칸(영문) 4해석 5동사형 6어법·어휘고르기
-#              7어색한곳찾기 8순서배열 9문단배열 10영작
-#
-# 중요: 처음엔 "어떤 단계가 선택되든 항상 전체를 다 생성"하는 방식으로 짰었는데,
-# 지문이 조금만 길어져도 매 unit마다 en/ko/ko_blanked/en_blanked/verb_prompt_en/
-# choice_prompt_en/word_order_words/given_words_for_writing 등 원문이 5~6번씩
-# 중복 생성되면서 출력 토큰이 폭증 -> Gemini가 중간에 잘리거나(빈 결과) 응답이
-# 너무 오래 걸려 타임아웃(503)이 나는 문제가 있었음. 그래서 지금은 실제로
-# 선택된 단계에 필요한 필드만 프롬프트에 요청하도록 동적으로 조립함.
-
 WORKBOOK_STEP_LABELS = {
-    "step1": "지문 연습하기",
     "step2": "빈칸 완성하기 (우리말)",
     "step3": "빈칸 완성하기 (영문)",
     "step4": "해석 연습하기",
@@ -132,108 +113,113 @@ WORKBOOK_STEP_LABELS = {
     "step8": "순서 배열하기",
     "step9": "문단 배열하기",
     "step10": "영작 연습하기",
+    "final_check": "Final Check (최종 점검)",
 }
 ALL_WORKBOOK_STEPS = list(WORKBOOK_STEP_LABELS.keys())
 
-# 각 단계가 실제로 필요로 하는 unit 필드. en/ko는 거의 모든 화면에서 라벨로 쓰이므로 항상 포함.
-_STEP_UNIT_FIELDS = {
-    "step1": [],
-    "step2": ["ko_blanked"],
-    "step3": ["en_blanked"],
-    "step4": [],
-    "step5": ["verb_prompt_en"],
-    "step6": ["choice_prompt_en", "choice_answer"],
-    "step7": [],  # flawed_text(전체 지문 단위)로 별도 처리
-    "step8": ["word_order_words", "word_order_answer"],
-    "step9": [],  # paragraph_order(전체 지문 단위)로 별도 처리
-    "step10": ["given_words_for_writing"],
-}
+# 화면/PDF에 보여줄 단계 번호(1지문연습하기가 빠지면서 STEP 2였던 것부터 다시 1로 매김).
+# final_check는 번호 없이 별도 "FINAL CHECK" 배지로 표시.
+WORKBOOK_STEP_DISPLAY_NUM = {key: i + 1 for i, key in enumerate(
+    ["step2", "step3", "step4", "step5", "step6", "step7", "step8", "step9", "step10"]
+)}
 
-_FIELD_DESCRIPTIONS = {
-    "ko_blanked": '- ko_blanked: ko 번역에서 핵심 어휘·표현 부분을 "_____"로 뚫은 버전',
-    "en_blanked": '- en_blanked: en 원문에서 핵심 어휘·표현 부분을 "_____"로 뚫은 버전',
-    "verb_prompt_en": '- verb_prompt_en: en 원문에서 동사(구)들을 원형으로 바꿔 괄호로 표시한 버전. 예: "will be held" → "(hold)"',
-    "choice_prompt_en": '- choice_prompt_en: en 원문에서 어법·어휘 포인트 1곳을 "[오답 / 정답]" 형식의 대괄호로 바꾼 버전',
-    "choice_answer": "- choice_answer: choice_prompt_en 대괄호의 정답 표현",
-    "word_order_words": "- word_order_words: en 원문을 의미 덩어리(단어 또는 짧은 구) 단위로 섞은 배열. 관사+명사, 전치사구 등은 하나의 조각으로 묶어도 됨",
-    "word_order_answer": "- word_order_answer: word_order_words를 올바르게 배열하면 나오는 원문(en과 동일)",
-    "given_words_for_writing": "- given_words_for_writing: 학생이 영작할 때 참고할 핵심 단어 2~5개 (원형)",
-}
-
-
-def build_workbook_system_prompt(steps: list[str] | None = None) -> str:
-    steps = steps or ALL_WORKBOOK_STEPS
-    steps_set = set(steps)
-
-    needed_fields = []
-    for s in steps:
-        for f in _STEP_UNIT_FIELDS.get(s, []):
-            if f not in needed_fields:
-                needed_fields.append(f)
-
-    field_lines = "\n".join(_FIELD_DESCRIPTIONS[f] for f in needed_fields)
-    field_json_lines = ",\n      ".join(f'"{f}": {"[...]" if "words" in f else "..."}' for f in needed_fields)
-
-    extra_sections = []
-    extra_json_keys = []
-
-    if "step7" in steps_set:
-        extra_sections.append(
-            "## 어색한 곳 찾기 (flawed_text) — unit과 별개로 지문 전체 대상 1개만 생성\n"
-            "전체 지문(모든 unit의 en을 이어붙인 것)에서 밑줄 후보 문구를 5~7개 골라 underlined_items 배열로 제시.\n"
-            "그중 정확히 3개는 어법상 틀리게 만들고(is_wrong: true, correction에 올바른 표현), 나머지는 원문 그대로 맞는\n"
-            "문구(is_wrong: false, correction 생략). 배열 순서는 지문에 등장하는 순서와 같아야 함."
-        )
-        extra_json_keys.append(
-            '"flawed_text": {\n'
-            '    "underlined_items": [\n'
-            '      {"text": "...", "is_wrong": true, "correction": "..."},\n'
-            '      {"text": "...", "is_wrong": false}\n'
-            "    ]\n"
-            "  }"
-        )
-
-    if "step9" in steps_set:
-        extra_sections.append(
-            "## 문단 배열하기 (paragraph_order) — 지문 전체 대상 1개만 생성\n"
-            "지문의 도입부(intro_en, 1~2문장)를 고정하고, 나머지를 3~4개 문단(chunk)으로 나눠 A, B, C(, D) 라벨을 붙임.\n"
-            "chunks 배열은 뒤섞인 순서로 제시하고, correct_order에 올바른 라벨 순서를 배열로 제시."
-        )
-        extra_json_keys.append(
-            '"paragraph_order": {\n'
-            '    "intro_en": "...",\n'
-            '    "chunks": [{"label": "A", "text": "..."}, {"label": "B", "text": "..."}],\n'
-            '    "correct_order": ["B", "A"]\n'
-            "  }"
-        )
-
-    extra_sections_text = ("\n\n" + "\n\n".join(extra_sections)) if extra_sections else ""
-    extra_json_text = (",\n  " + ",\n  ".join(extra_json_keys)) if extra_json_keys else ""
-    fields_block = ("\n" + field_lines) if field_lines else ""
-    unit_json_extra = (",\n      " + field_json_lines) if field_json_lines else ""
-
-    return f"""당신은 한국 고등학교 영어 워크북(학력평가 스타일)을 만드는 전문 튜터입니다.
+WORKBOOK_SYSTEM_PROMPT = """당신은 한국 고등학교 영어 워크북(학력평가 스타일)을 만드는 전문 튜터입니다.
 주어진 영어 지문으로 아래 구조를 JSON으로만 생성하세요. 설명이나 마크다운 코드펜스 없이 JSON만 출력합니다.
-불필요한 필드는 만들지 마세요 — 요청된 필드만 정확히 채우면 됩니다 (출력을 짧게 유지하는 게 중요함).
 
 ## 지문을 의미 단위(unit)로 나누기
 지문을 자연스러운 의미 단위로 나눕니다 (한 문장일 수도, 짧으면 두 문장을 묶을 수도 있음 —
 원본 학력평가 지문의 단락 구성을 참고해서 자연스럽게). 각 unit에 1부터 순서대로 num을 매깁니다.
-모든 unit에 아래 필드를 채우세요:
+모든 unit에 아래 필드를 전부 채우세요 (일부 단계만 쓰더라도 항상 전체를 생성):
 
 - en: 원문 그대로
-- ko: 자연스러운 한글 번역{fields_block}
-{extra_sections_text}
+- ko: 자연스러운 한글 번역
+- key_terms: 이 unit에서 밑줄/색 강조할 핵심 어휘·표현 3~6개, 각각 {"en": "...", "ko": "..."}
+  (en은 원문에 실제로 등장하는 형태 그대로, ko는 그 뜻)
+- ko_blanked: ko 번역에서 key_terms에 해당하는 부분을 "_____"로 뚫은 버전
+- en_blanked: en 원문에서 key_terms에 해당하는 부분을 "_____"로 뚫은 버전
+- verb_prompt_en: en 원문에서 동사(구)들을 원형으로 바꿔 괄호로 표시한 버전
+  예: "will be held" → "(hold)". 시제/수동태/조동사 등이 포함된 동사 지점마다 적용.
+- choice_prompt_en: en 원문에서 어법·어휘 포인트 1곳을 "[오답 / 정답]" 형식의 대괄호로 바꾼 버전
+- choice_answer: choice_prompt_en 대괄호의 정답 표현
+- word_order_words: en 원문을 의미 덩어리(단어 또는 짧은 구) 단위로 섞은 배열.
+  관사+명사, 전치사구 등은 하나의 조각으로 묶어도 됨.
+- word_order_answer: word_order_words를 올바르게 배열하면 나오는 원문(en과 동일)
+- given_words_for_writing: 학생이 영작할 때 참고할 핵심 단어 2~5개 (원형)
 
-## 출력 형식 (JSON) — 아래 키만 포함하세요
-{{
+## 어색한 곳 찾기 (flawed_text) — unit과 별개로 지문 전체 대상 1개만 생성
+전체 지문(모든 unit의 en을 이어붙인 것)에서 밑줄 후보 문구를 5~7개 골라 underlined_items 배열로 제시.
+그중 정확히 3개는 어법상 틀리게 만들고(is_wrong: true, correction에 올바른 표현), 나머지는 원문 그대로 맞는
+문구(is_wrong: false, correction 생략). 배열 순서는 지문에 등장하는 순서와 같아야 함.
+
+## 문단 배열하기 (paragraph_order) — 지문 전체 대상 1개만 생성
+지문의 도입부(intro_en, 1~2문장)를 고정하고, 나머지를 3~4개 문단(chunk)으로 나눠 A, B, C(, D) 라벨을 붙임.
+chunks 배열은 뒤섞인 순서로 제시하고, correct_order에 올바른 라벨 순서를 배열로 제시.
+
+## Final Check (final_check) — 지문 전체를 훑는 종합 점검 문제, 지문 전체 대상 1개만 생성
+지문 전체를 자연스러운 문단/문단(또는 화자 전환) 단위로 3~6개의 block으로 나눕니다. 각 block은
+그 부분의 원문을 이어서 담되, 부분부분을 아래 4가지 문제 유형으로 바꿔 segments 배열에 순서대로
+나열합니다 (원문 순서를 그대로 유지, 어길 수 없음):
+
+- {"type": "text", "text": "..."} — 그대로 두는 일반 텍스트 조각.
+- {"type": "blank", "num": N, "word_count": 1~3, "answer": "..."} — 어휘/문법 빈칸. answer는 지문에서
+  실제로 그 자리에 들어가는 단어(구) 원형 그대로. word_count는 answer의 단어 개수.
+- {"type": "choice", "num": N, "choices": ["오답", "정답"], "answer": "정답"} — 괄호 안에서 고르는
+  어법/어휘 문제. choices는 반드시 2개, 정답은 choices 안에 그대로 포함.
+- {"type": "order", "num": N, "words": ["...", "..."], "answer": "올바른 어순의 완전한 구/절"} — 순서
+  배열. words는 3~6개의 의미 단위로 섞은 배열.
+- {"type": "writing", "num": N, "prompt_ko": "우리말 지시 문구", "given_words": ["...", "..."],
+  "answer": "정답 영어 문장/구"} — 영작. given_words는 학생에게 힌트로 주는 원형 단어 2~4개.
+
+블록 전체를 이어 붙였을 때 지문 원문과 의미가 같아야 합니다(빈칸/선택/순서/영작으로 바뀐 부분 제외).
+num은 지문 전체를 통틀어 1부터 순서대로 매기고(문서 전체에서 유일), 총 문제 수는 지문 길이에 비례해
+20~40개 정도. 네 가지 유형을 골고루 섞으세요(어느 한 유형에 치우치지 말 것). 각 block에는 해당
+부분의 자연스러운 한글 번역(ko)도 함께 제공합니다.
+
+## 출력 형식 (JSON)
+{
   "units": [
-    {{
+    {
       "num": 1,
-      "en": "...", "ko": "..."{unit_json_extra}
-    }}
-  ]{extra_json_text}
-}}
+      "en": "...", "ko": "...",
+      "key_terms": [{"en":"annual","ko":"연례"}],
+      "ko_blanked": "...", "en_blanked": "...",
+      "verb_prompt_en": "...",
+      "choice_prompt_en": "...", "choice_answer": "...",
+      "word_order_words": ["...", "..."], "word_order_answer": "...",
+      "given_words_for_writing": ["...", "..."]
+    }
+  ],
+  "flawed_text": {
+    "underlined_items": [
+      {"text": "...", "is_wrong": true, "correction": "..."},
+      {"text": "...", "is_wrong": false}
+    ]
+  },
+  "paragraph_order": {
+    "intro_en": "...",
+    "chunks": [{"label": "A", "text": "..."}, {"label": "B", "text": "..."}],
+    "correct_order": ["B", "A"]
+  },
+  "final_check": {
+    "blocks": [
+      {
+        "num": 1,
+        "ko": "이 블록 전체의 자연스러운 한글 번역",
+        "segments": [
+          {"type": "text", "text": "Hi, I'm Jim Brown, the "},
+          {"type": "blank", "num": 1, "word_count": 1, "answer": "director"},
+          {"type": "text", "text": " of Happy Days. A lot of people are "},
+          {"type": "choice", "num": 2, "choices": ["work", "working"], "answer": "working"},
+          {"type": "text", "text": " hard. "},
+          {"type": "order", "num": 3, "words": ["moments", "happy", "their", "capture", "to"], "answer": "To capture their happy moments"},
+          {"type": "text", "text": ", I use drones. So, I "},
+          {"type": "writing", "num": 4, "prompt_ko": "더 좋은 이야기를 만들기 위해서", "given_words": ["create", "better", "story"], "answer": "To create a better story"},
+          {"type": "text", "text": ", I can change the order."}
+        ]
+      }
+    ]
+  }
+}
 """
 
 
@@ -243,22 +229,38 @@ def build_workbook_user_message(passage_text: str) -> str:
 
 
 # ---------- OX 리딩 워크북 ----------
-OX_SYSTEM_PROMPT = """당신은 한국 고등학교 영어 내용일치 문제를 만드는 전문 튜터입니다.
-주어진 영어 지문으로 한글 O/X 10문항과 영어 O/X 5문항을 JSON으로만 생성하세요.
+# 한글/영어 문항 수를 선생님이 각각 고를 수 있게 함 (기본 10/5, 최대 20/20).
+OX_DEFAULT_KOREAN_COUNT = 10
+OX_DEFAULT_ENGLISH_COUNT = 5
+OX_MAX_COUNT = 20
 
-## 한글 O/X 10문항 (korean_ox)
-지문 내용을 한글로 서술한 문장 10개. 지문과 일치하면 answer=true, 틀리면 false.
+
+def build_ox_system_prompt(korean_count: int, english_count: int) -> str:
+    korean_count = max(1, min(korean_count, OX_MAX_COUNT))
+    english_count = max(1, min(english_count, OX_MAX_COUNT))
+    return f"""당신은 한국 고등학교 영어 내용일치 문제를 만드는 전문 튜터입니다.
+주어진 영어 지문으로 한글 O/X {korean_count}문항과 영어 O/X {english_count}문항을 JSON으로만 생성하세요.
+설명이나 마크다운 코드펜스 없이 JSON 객체만 출력합니다.
+
+## 한글 O/X {korean_count}문항 (korean_ox)
+지문 내용을 한글로 서술한 문장 정확히 {korean_count}개. num은 1부터 {korean_count}까지.
+지문과 일치하면 answer=true, 틀리면 false. 절반 정도는 true, 절반 정도는 false가 되게 섞을 것.
 틀린 문장은 지문의 특정 부분을 살짝 바꿔서 만들되, 너무 뻔하게 티나지 않게 할 것.
 
-## 영어 O/X 5문항 (english_ox)
-지문 내용을 영어로 서술한 문장 5개. 위와 동일한 방식으로 정답 판정.
+## 영어 O/X {english_count}문항 (english_ox)
+지문 내용을 영어로 서술한 문장 정확히 {english_count}개. num은 1부터 {english_count}까지.
+위와 동일한 방식으로 정답 판정.
 
 ## 출력 형식 (JSON)
-{
-  "korean_ox": [{"num": 1, "statement": "...", "answer": true}],
-  "english_ox": [{"num": 1, "statement": "...", "answer": false}]
-}
+{{
+  "korean_ox": [{{"num": 1, "statement": "...", "answer": true}}],
+  "english_ox": [{{"num": 1, "statement": "...", "answer": false}}]
+}}
 """
+
+
+# 하위 호환용 (기본 개수로 생성하고 싶을 때)
+OX_SYSTEM_PROMPT = build_ox_system_prompt(OX_DEFAULT_KOREAN_COUNT, OX_DEFAULT_ENGLISH_COUNT)
 
 
 def build_ox_user_message(passage_text: str) -> str:
@@ -268,11 +270,13 @@ def build_ox_user_message(passage_text: str) -> str:
 # ---------- 목표 어법 문제 (문법 테스트, 레퍼런스 형식) ----------
 GRAMMAR_QUIZ_MODEL = "gemini-3.5-flash"
 
-GRAMMAR_QUIZ_SYSTEM_PROMPT = """당신은 한국 중·고등학교 영어 문법 테스트지를 만드는 전문 튜터입니다.
-주어진 지문과 목표 어법을 바탕으로 문법 테스트 10문항을 JSON으로만 생성하세요.
+GRAMMAR_QUIZ_QUESTION_COUNT = 25
+
+GRAMMAR_QUIZ_SYSTEM_PROMPT = f"""당신은 한국 중·고등학교 영어 문법 테스트지를 만드는 전문 튜터입니다.
+주어진 지문과 목표 어법을 바탕으로 문법 테스트 {GRAMMAR_QUIZ_QUESTION_COUNT}문항을 JSON으로만 생성하세요.
 설명이나 마크다운 코드펜스 없이 JSON 객체만 출력합니다.
 
-## 문제 유형 (아래 5가지를 섞어서 10문항 출제)
+## 문제 유형 (아래 5가지를 골고루 섞어서 {GRAMMAR_QUIZ_QUESTION_COUNT}문항 출제, 유형별 5문항씩 균형있게)
 
 1. "choice_parens" — 문장 속 괄호 두 군데(또는 한 군데) 안에 선택지가 있고, 그 조합을 고르는 문제.
    sentence 안에 "(A / B)" 형태로 괄호를 그대로 포함시키고, choices는 조합별 문자열
@@ -293,11 +297,13 @@ GRAMMAR_QUIZ_SYSTEM_PROMPT = """당신은 한국 중·고등학교 영어 문법
 
 ## 태그 (tag)
 문항마다 그 문제가 다루는 문법 포인트를 2~6자로 짧게 표시 (예: "명사와 관사", "조동사", "to부정사",
-"문장의 형식과 의문문", "시제", "동명사", "접속사와 간접의문문", "수동태", "대명사"). 목표 어법이
-지정되면 그 문법을 최소 3문항 이상 다루고, 나머지는 지문 속 다른 어법 포인트로 다양하게 구성.
+"문장의 형식과 의문문", "시제", "동명사", "접속사와 간접의문문", "수동태", "대명사", "관계대명사",
+"분사구문", "가정법", "비교구문", "부정사", "전치사"). 목표 어법이 지정되면 그 문법을 최소 6문항
+이상 다루고, 나머지는 지문 속 다른 어법 포인트로 다양하게 구성해서 겹치는 문장/포인트가 최대한
+없게 할 것 (지문이 짧아 문장이 부족하면 같은 문장에서 다른 어법 포인트를 뽑아 써도 됨).
 
 ## 절대 규칙
-- 정확히 10문항. num은 1~10.
+- 정확히 {GRAMMAR_QUIZ_QUESTION_COUNT}문항. num은 1~{GRAMMAR_QUIZ_QUESTION_COUNT}.
 - choice_parens/fill_blank_choice/choose_sentence는 반드시 정답이 명확히 하나로 판별되게.
 - order_words/rewrite는 채점 기준이 되는 answer를 반드시 자연스러운 완전한 문장으로 제공.
 - instruction은 한국어로, 실제 문제지에 나오는 지시문 톤으로 작성
@@ -348,7 +354,7 @@ GRAMMAR_QUIZ_SYSTEM_PROMPT = """당신은 한국 중·고등학교 영어 문법
 
 
 def build_grammar_quiz_user_message(passage_text: str, target_grammar: str | None = None) -> str:
-    lines = ["다음 지문으로 문법 테스트 10문항을 만들어줘:"]
+    lines = [f"다음 지문으로 문법 테스트 {GRAMMAR_QUIZ_QUESTION_COUNT}문항을 만들어줘:"]
     if target_grammar and target_grammar.strip():
         lines.append(f"목표 어법: {target_grammar.strip()}")
     lines.append("")
